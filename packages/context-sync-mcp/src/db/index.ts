@@ -1,64 +1,185 @@
 /**
  * Context Sync MCP v2.0 - Database Module
- * SQLite 데이터베이스 초기화 및 관리
+ * sql.js (WebAssembly) 기반 SQLite 데이터베이스
  *
- * NOTE: better-sqlite3는 네이티브 모듈이므로 Windows에서 Visual Studio Build Tools가 필요합니다.
- * 모듈 로드 실패 시 null을 반환하고 JSON 폴백 모드로 동작합니다.
+ * sql.js는 WebAssembly 기반이므로 네이티브 컴파일이 필요 없습니다.
+ * 모든 플랫폼에서 npm install만으로 동작합니다.
  */
 
 import * as path from 'path';
 import * as fs from 'fs';
+import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
 import { getAllSchemaQueries, SCHEMA_VERSION } from './schema.js';
 
 export { SCHEMA_VERSION } from './schema.js';
 
 /**
- * SQLite Statement 인터페이스 (better-sqlite3 호환)
+ * sql.js 초기화 상태
  */
-interface Statement {
-  run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
-  get(...params: unknown[]): unknown;
-  all(...params: unknown[]): unknown[];
+let SQL: Awaited<ReturnType<typeof initSqlJs>> | null = null;
+let initPromise: Promise<void> | null = null;
+let initError: Error | null = null;
+
+/**
+ * sql.js 초기화 (WASM 로드)
+ */
+async function ensureSqlJsInitialized(): Promise<boolean> {
+  if (SQL) return true;
+  if (initError) return false;
+
+  if (!initPromise) {
+    initPromise = (async () => {
+      try {
+        SQL = await initSqlJs();
+      } catch (err) {
+        initError = err as Error;
+        console.error('[Context Sync] sql.js 초기화 실패:', err);
+      }
+    })();
+  }
+
+  await initPromise;
+  return SQL !== null;
 }
 
 /**
- * SQLite Database 인터페이스 (better-sqlite3 호환)
+ * Statement 래퍼 (better-sqlite3 호환 API 제공)
  */
-export interface DatabaseInstance {
-  prepare(sql: string): Statement;
-  exec(sql: string): void;
-  pragma(pragma: string): unknown;
-  transaction<T>(fn: () => T): () => T;
-  close(): void;
-  open: boolean;
-}
+class StatementWrapper {
+  private db: SqlJsDatabase;
+  private sql: string;
 
-// better-sqlite3 동적 로드 시도
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let DatabaseConstructor: (new (path: string, options?: { readonly?: boolean }) => DatabaseInstance) | null = null;
-let dbLoadError: Error | null = null;
+  constructor(db: SqlJsDatabase, sql: string) {
+    this.db = db;
+    this.sql = sql;
+  }
 
-try {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  DatabaseConstructor = require('better-sqlite3');
-} catch (err) {
-  dbLoadError = err as Error;
-  console.error('[Context Sync] SQLite 모듈을 로드할 수 없습니다. JSON 폴백 모드로 동작합니다.');
-  console.error('[Context Sync] SQLite 기능을 사용하려면 Visual Studio Build Tools를 설치하세요.');
+  run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint } {
+    this.db.run(this.sql, params as (string | number | null | Uint8Array)[]);
+    const changes = this.db.getRowsModified();
+    // sql.js doesn't provide lastInsertRowid directly, use a query
+    const result = this.db.exec('SELECT last_insert_rowid() as id');
+    const lastInsertRowid = result[0]?.values[0]?.[0] as number || 0;
+    return { changes, lastInsertRowid };
+  }
+
+  get(...params: unknown[]): unknown {
+    const stmt = this.db.prepare(this.sql);
+    stmt.bind(params as (string | number | null | Uint8Array)[]);
+    if (stmt.step()) {
+      const columns = stmt.getColumnNames();
+      const values = stmt.get();
+      stmt.free();
+      const row: Record<string, unknown> = {};
+      columns.forEach((col: string, i: number) => {
+        row[col] = values[i];
+      });
+      return row;
+    }
+    stmt.free();
+    return undefined;
+  }
+
+  all(...params: unknown[]): unknown[] {
+    const results: unknown[] = [];
+    const stmt = this.db.prepare(this.sql);
+    stmt.bind(params as (string | number | null | Uint8Array)[]);
+    while (stmt.step()) {
+      const columns = stmt.getColumnNames();
+      const values = stmt.get();
+      const row: Record<string, unknown> = {};
+      columns.forEach((col: string, i: number) => {
+        row[col] = values[i];
+      });
+      results.push(row);
+    }
+    stmt.free();
+    return results;
+  }
 }
 
 /**
- * SQLite 사용 가능 여부 확인
+ * Database 래퍼 (better-sqlite3 호환 API 제공)
  */
-export function isSqliteAvailable(): boolean {
-  return DatabaseConstructor !== null;
-}
+export class DatabaseInstance {
+  private db: SqlJsDatabase;
+  private dbPath: string;
+  private _open: boolean = true;
 
-/**
- * SQLite 로드 에러 반환
- */
-export function getSqliteLoadError(): Error | null {
-  return dbLoadError;
+  constructor(db: SqlJsDatabase, dbPath: string) {
+    this.db = db;
+    this.dbPath = dbPath;
+  }
+
+  get open(): boolean {
+    return this._open;
+  }
+
+  prepare(sql: string): StatementWrapper {
+    return new StatementWrapper(this.db, sql);
+  }
+
+  exec(sql: string): void {
+    this.db.exec(sql);
+  }
+
+  pragma(pragmaStr: string): unknown {
+    // sql.js에서 pragma 실행
+    const result = this.db.exec(`PRAGMA ${pragmaStr}`);
+    if (result.length > 0 && result[0].values.length > 0) {
+      return result[0].values.map((row: unknown[]) => {
+        const obj: Record<string, unknown> = {};
+        result[0].columns.forEach((col: string, i: number) => {
+          obj[col] = row[i];
+        });
+        return obj;
+      });
+    }
+    return [];
+  }
+
+  transaction<T>(fn: () => T): () => T {
+    return () => {
+      this.db.exec('BEGIN TRANSACTION');
+      try {
+        const result = fn();
+        this.db.exec('COMMIT');
+        return result;
+      } catch (err) {
+        this.db.exec('ROLLBACK');
+        throw err;
+      }
+    };
+  }
+
+  close(): void {
+    if (this._open) {
+      // 닫기 전에 저장
+      this.save();
+      this.db.close();
+      this._open = false;
+    }
+  }
+
+  /**
+   * 데이터베이스를 파일로 저장
+   */
+  save(): void {
+    try {
+      const data = this.db.export();
+      const buffer = Buffer.from(data);
+      fs.writeFileSync(this.dbPath, buffer);
+    } catch (err) {
+      console.error('[Context Sync] DB 저장 실패:', err);
+    }
+  }
+
+  /**
+   * 내부 sql.js DB 인스턴스 반환 (고급 사용)
+   */
+  getInternalDb(): SqlJsDatabase {
+    return this.db;
+  }
 }
 
 /**
@@ -67,28 +188,27 @@ export function getSqliteLoadError(): Error | null {
 export interface DatabaseOptions {
   /** 데이터베이스 파일 경로 */
   dbPath?: string;
-  /** WAL 모드 사용 여부 (기본: true) */
-  walMode?: boolean;
   /** 읽기 전용 모드 */
   readonly?: boolean;
 }
 
 /**
- * 데이터베이스 초기화
+ * 데이터베이스 초기화 (비동기)
  * @param storePath .context-sync 디렉토리 경로
  * @param options 초기화 옵션
- * @returns DatabaseInstance 또는 null (SQLite 사용 불가 시)
+ * @returns DatabaseInstance 또는 null (초기화 실패 시)
  */
-export function initDatabase(
+export async function initDatabaseAsync(
   storePath: string,
   options: DatabaseOptions = {}
-): DatabaseInstance | null {
-  // SQLite 모듈이 없으면 null 반환
-  if (!DatabaseConstructor) {
+): Promise<DatabaseInstance | null> {
+  // sql.js 초기화
+  const initialized = await ensureSqlJsInitialized();
+  if (!initialized || !SQL) {
     return null;
   }
 
-  const { walMode = true, readonly = false } = options;
+  const { readonly = false } = options;
   const dbPath = options.dbPath || path.join(storePath, 'history.db');
 
   // 디렉토리 확인/생성
@@ -97,25 +217,78 @@ export function initDatabase(
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  // 데이터베이스 연결
-  const db = new DatabaseConstructor(dbPath, { readonly });
+  let db: SqlJsDatabase;
 
-  // 성능 최적화 설정
-  if (!readonly) {
-    if (walMode) {
-      db.pragma('journal_mode = WAL');
+  // 기존 DB 파일 로드 또는 새로 생성
+  if (fs.existsSync(dbPath)) {
+    try {
+      const buffer = fs.readFileSync(dbPath);
+      db = new SQL.Database(buffer);
+    } catch (err) {
+      console.warn('[Context Sync] 기존 DB 로드 실패, 새로 생성:', err);
+      db = new SQL.Database();
     }
-    db.pragma('synchronous = NORMAL');
-    db.pragma('foreign_keys = ON');
-    db.pragma('cache_size = -64000'); // 64MB 캐시
+  } else {
+    db = new SQL.Database();
   }
+
+  const wrapper = new DatabaseInstance(db, dbPath);
 
   // 스키마 초기화
   if (!readonly) {
-    initSchema(db);
+    initSchema(wrapper);
+    wrapper.save(); // 초기화 후 저장
   }
 
-  return db;
+  return wrapper;
+}
+
+/**
+ * 동기 버전 (이미 초기화된 경우에만 사용)
+ * @deprecated initDatabaseAsync 사용 권장
+ */
+export function initDatabase(
+  storePath: string,
+  options: DatabaseOptions = {}
+): DatabaseInstance | null {
+  if (!SQL) {
+    console.warn('[Context Sync] sql.js가 초기화되지 않았습니다. initDatabaseAsync를 사용하세요.');
+    return null;
+  }
+
+  const { readonly = false } = options;
+  const dbPath = options.dbPath || path.join(storePath, 'history.db');
+
+  // 디렉토리 확인/생성
+  const dir = path.dirname(dbPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  let db: SqlJsDatabase;
+
+  // 기존 DB 파일 로드 또는 새로 생성
+  if (fs.existsSync(dbPath)) {
+    try {
+      const buffer = fs.readFileSync(dbPath);
+      db = new SQL.Database(buffer);
+    } catch (err) {
+      console.warn('[Context Sync] 기존 DB 로드 실패, 새로 생성:', err);
+      db = new SQL.Database();
+    }
+  } else {
+    db = new SQL.Database();
+  }
+
+  const wrapper = new DatabaseInstance(db, dbPath);
+
+  // 스키마 초기화
+  if (!readonly) {
+    initSchema(wrapper);
+    wrapper.save();
+  }
+
+  return wrapper;
 }
 
 /**
@@ -166,6 +339,15 @@ export function closeDatabase(db: DatabaseInstance): void {
 }
 
 /**
+ * 데이터베이스 저장 (sql.js는 메모리 기반이므로 수동 저장 필요)
+ */
+export function saveDatabase(db: DatabaseInstance): void {
+  if (db && db.open) {
+    db.save();
+  }
+}
+
+/**
  * 데이터베이스 상태 확인
  */
 export function getDatabaseStats(db: DatabaseInstance): {
@@ -181,10 +363,10 @@ export function getDatabaseStats(db: DatabaseInstance): {
     db.prepare('SELECT COUNT(*) as count FROM actions').get() as { count: number }
   ).count;
 
-  // 데이터베이스 파일 크기
-  const pageCount = (db.pragma('page_count') as { page_count: number }[])[0]?.page_count || 0;
-  const pageSize = (db.pragma('page_size') as { page_size: number }[])[0]?.page_size || 4096;
-  const dbSizeBytes = pageCount * pageSize;
+  // sql.js에서는 export된 데이터 크기로 추정
+  const internalDb = db.getInternalDb();
+  const data = internalDb.export();
+  const dbSizeBytes = data.length;
 
   return {
     contextCount,
@@ -215,4 +397,18 @@ export function withTransaction<T>(
 ): T {
   const transaction = db.transaction(fn);
   return transaction();
+}
+
+/**
+ * SQLite 사용 가능 여부 확인 (sql.js는 항상 사용 가능)
+ */
+export function isSqliteAvailable(): boolean {
+  return true; // sql.js는 항상 사용 가능
+}
+
+/**
+ * SQLite 로드 에러 반환
+ */
+export function getSqliteLoadError(): Error | null {
+  return initError;
 }

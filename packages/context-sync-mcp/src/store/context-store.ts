@@ -28,7 +28,7 @@ import type {
 } from "../types/index.js";
 
 // v2.0 imports
-import { initDatabase, closeDatabase, type DatabaseInstance } from "../db/index.js";
+import { initDatabaseAsync, closeDatabase, type DatabaseInstance } from "../db/index.js";
 import { migrateFromJSON, needsMigration } from "../db/migrate.js";
 import { generateGoalShort, generateSummaryShort, hasWarnings } from "../utils/truncate.js";
 import { searchContexts as dbSearchContexts } from "../tools/context-search.js";
@@ -202,9 +202,9 @@ export class ContextStore {
     // 기존 컨텍스트 로드 시도
     await this.loadCurrentContext();
 
-    // v2.0: SQLite DB 초기화
+    // v2.0: SQLite DB 초기화 (sql.js - WebAssembly 기반)
     try {
-      this.db = initDatabase(this.storePath);
+      this.db = await initDatabaseAsync(this.storePath);
 
       if (this.db) {
         this.dbEnabled = true;
