@@ -15,6 +15,9 @@ on:
           - minor
           - major
 
+permissions:
+  contents: write
+
 jobs:
   publish:
     name: Build and Publish
