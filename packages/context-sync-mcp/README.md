@@ -15,9 +15,10 @@ Cursor, Claude Code, Windsurf 등 여러 AI 코딩 도구에서 작업 컨텍스
 ## 주요 기능
 
 - **컨텍스트 동기화**: 도구 전환 시 작업 내용 자동 인수인계
+- **자연어 명령**: "저장해줘", "불러와" 같은 자연어로 사용
+- **자동 저장/로드**: 세션 시작 시 자동 로드, 변경 시 자동 저장
 - **의사결정 기록**: 왜 특정 방식을 선택했는지 기록
 - **실패 기록**: 시도했지만 실패한 접근법 공유
-- **블로커 추적**: 막힌 부분과 해결 방법 기록
 - **스냅샷**: 특정 시점으로 롤백 가능
 
 ## 빠른 시작
@@ -26,15 +27,6 @@ Cursor, Claude Code, Windsurf 등 여러 AI 코딩 도구에서 작업 컨텍스
 
 ```bash
 npm install @liruns/context-sync-mcp
-```
-
-### 소스에서 빌드
-
-```bash
-git clone https://github.com/Liruns/context-sync-mcp.git
-cd context-sync-mcp/packages/context-sync-mcp
-npm install
-npm run build
 ```
 
 ### MCP 설정
@@ -52,13 +44,42 @@ npm run build
 }
 ```
 
-## 사용 가능한 도구
+## 자연어로 사용하기
+
+```
+"저장해줘" → 컨텍스트 저장
+"불러와" / "이전 작업" → 컨텍스트 로드
+"상태" / "어디까지 했어" → 현재 상태 조회
+"요약해줘" → 컨텍스트 요약
+"자동저장 켜줘" → 자동 동기화 시작
+"자동저장 꺼줘" → 자동 동기화 중지
+```
+
+## 자동화 설정
+
+`.context-sync/config.json`에서 설정:
+
+```json
+{
+  "automation": {
+    "autoLoad": true,   // 세션 시작 시 자동 로드
+    "autoSave": true,   // 변경 시 자동 저장
+    "autoSync": false   // 자동 동기화 시작
+  }
+}
+```
+
+## 사용 가능한 도구 (17개)
 
 | 카테고리 | 도구 | 설명 |
 |---------|------|------|
+| 자연어 | `ctx` | 자연어 명령 (저장/로드/상태/요약) |
+| 자동화 | `session_start` | 세션 시작 (자동 로드 지원) |
+| 자동화 | `automation_config` | 자동화 설정 관리 |
 | 컨텍스트 | `context_save` | 작업 컨텍스트 저장 |
 | 컨텍스트 | `context_load` | 컨텍스트 로드 |
 | 컨텍스트 | `context_query` | 특정 정보 조회 |
+| 컨텍스트 | `context_summarize` | 컨텍스트 요약 (토큰 절약) |
 | 기록 | `decision_log` | 의사결정 기록 |
 | 기록 | `attempt_log` | 시도 기록 |
 | 기록 | `blocker_add` | 블로커 추가 |
@@ -66,46 +87,17 @@ npm run build
 | 인수인계 | `handoff` | AI 에이전트 인수인계 |
 | 스냅샷 | `snapshot_create` | 스냅샷 생성 |
 | 스냅샷 | `snapshot_list` | 스냅샷 목록 |
-
-## 사용 예시
-
-```bash
-# 작업 시작
-context_save로 "로그인 기능 구현" 목표 저장해줘
-
-# 결정 기록
-decision_log로 "JWT 방식 사용" 결정 기록해줘. 이유는 "세션보다 stateless해서"
-
-# 다른 도구로 인수인계
-handoff로 Cursor에게 인수인계해줘. 요약: "JWT 로그인 구현 완료"
-
-# 다른 도구에서 이어받기
-context_load로 이전 작업 내용 불러와줘
-```
+| 동기화 | `sync_start` | 자동 동기화 시작 |
+| 동기화 | `sync_stop` | 자동 동기화 중지 |
+| 동기화 | `sync_status` | 동기화 상태 조회 |
 
 ## 저장 위치
 
 ```
 .context-sync/
-├── config.json      # 설정
+├── config.json      # 설정 (자동화 포함)
 ├── current.json     # 현재 컨텍스트
 └── snapshots/       # 스냅샷들
-```
-
-## 개발
-
-```bash
-# 의존성 설치
-npm install
-
-# 빌드
-npm run build
-
-# 테스트
-npm test
-
-# 개발 모드
-npm run dev
 ```
 
 ## 문서
@@ -118,10 +110,6 @@ npm run dev
 ## 라이선스
 
 [MIT License](LICENSE)
-
-## 기여
-
-버그 리포트, 기능 요청, PR을 환영합니다!
 
 ## 링크
 

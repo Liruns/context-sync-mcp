@@ -13,6 +13,8 @@ Context Sync MCP is an MCP (Model Context Protocol) server that enables seamless
 ### Why do you need this?
 
 - **Prevent context loss when switching agents**: Maintain work context when switching from Claude Code to Cursor
+- **Natural language commands**: Use simple phrases like "save" or "load" instead of tool names
+- **Auto save/load**: Automatically load previous context on session start
 - **Decision logging**: Allow other AIs to understand why certain approaches were chosen
 - **Failure logging**: Share failed attempts to prevent repeating the same mistakes
 - **Work continuity**: Restore state to specific points using snapshots
@@ -21,12 +23,15 @@ Context Sync MCP is an MCP (Model Context Protocol) server that enables seamless
 
 | Feature | Description |
 |---------|-------------|
+| Natural Language | Use "save", "load", "status" commands naturally |
+| Auto Save/Load | Configure automatic context persistence |
 | Context Save/Load | Manage work goals, status, and next steps |
 | Decision Logging | Record decisions with rationale |
 | Approach Logging | Track successful/failed attempts |
 | Blocker Management | Track blockers and their resolutions |
 | Agent Handoff | Seamless handoff between AI agents |
 | Snapshots | Save and restore state at specific points |
+| Auto-Sync | Automatic sync on file save, editor switch, Git commit |
 
 ## Installation
 
@@ -94,6 +99,26 @@ Add MCP server in Windsurf settings:
 
 ## Usage
 
+### Natural Language Commands (New!)
+
+Use the `ctx` tool with natural language:
+
+```
+"save" / "저장해줘"        → Save context
+"load" / "불러와"          → Load previous context
+"status" / "상태"          → Check current status
+"summary" / "요약"         → Get context summary
+"auto on" / "자동저장 켜줘" → Start auto-sync
+"auto off" / "자동저장 꺼줘" → Stop auto-sync
+```
+
+### Session Start with Auto-Load
+
+```
+# Automatically load previous context when starting
+> session_start agent: "claude-code"
+```
+
 ### Basic Workflow
 
 ```
@@ -116,17 +141,59 @@ Add MCP server in Windsurf settings:
    > Load previous context with context_load
 ```
 
-### Available Tools
+### Auto-Sync
 
-#### Context Management
+```
+# Start auto-sync (saves on editor switch, file save, Git commit)
+> sync_start
+
+# Check status
+> sync_status
+
+# Stop
+> sync_stop
+```
+
+## Automation Settings
+
+Configure in `.context-sync/config.json`:
+
+```json
+{
+  "automation": {
+    "autoLoad": true,    // Auto-load context on session start
+    "autoSave": true,    // Auto-save on changes
+    "autoSync": false    // Auto-start sync engine
+  }
+}
+```
+
+Use `automation_config` tool to view/modify:
+
+```
+> automation_config autoLoad: true, autoSync: true
+```
+
+## Available Tools (17)
+
+### Natural Language & Automation
+
+| Tool | Description | Required Parameters |
+|------|-------------|---------------------|
+| `ctx` | Natural language commands | `command` |
+| `session_start` | Start session with auto-load | - |
+| `automation_config` | Manage automation settings | - |
+
+### Context Management
 
 | Tool | Description | Required Parameters |
 |------|-------------|---------------------|
 | `context_save` | Save/update context | `goal` |
 | `context_load` | Load context | - |
 | `context_query` | Query specific info | `query` |
+| `context_summarize` | Summarize context (token-saving) | - |
 
-#### Logging
+### Logging
 
 | Tool | Description | Required Parameters |
 |------|-------------|---------------------|
@@ -135,7 +202,7 @@ Add MCP server in Windsurf settings:
 | `blocker_add` | Add blocker | `description` |
 | `blocker_resolve` | Resolve blocker | `blockerId`, `resolution` |
 
-#### Handoff
+### Handoff & Snapshots
 
 | Tool | Description | Required Parameters |
 |------|-------------|---------------------|
@@ -143,13 +210,21 @@ Add MCP server in Windsurf settings:
 | `snapshot_create` | Create snapshot | - |
 | `snapshot_list` | List snapshots | - |
 
+### Auto-Sync
+
+| Tool | Description | Required Parameters |
+|------|-------------|---------------------|
+| `sync_start` | Start auto-sync | - |
+| `sync_stop` | Stop auto-sync | - |
+| `sync_status` | Check sync status | - |
+
 ## Storage Location
 
 Context is stored in the `.context-sync/` folder at the project root:
 
 ```
 .context-sync/
-├── config.json      # Configuration
+├── config.json      # Configuration (including automation)
 ├── current.json     # Current context
 └── snapshots/       # Snapshots
 ```
@@ -193,20 +268,24 @@ src/
 ├── index.ts              # MCP server entry point
 ├── store/
 │   └── context-store.ts  # Context store
+├── sync/
+│   └── sync-engine.ts    # Auto-sync engine
+├── watcher/
+│   └── editor-watcher.ts # Editor switch detection
+├── utils/
+│   └── summarizer.ts     # Context summarizer
 └── types/
     └── context.ts        # Type definitions
-
-tests/
-├── context-store.test.ts # Store unit tests
-└── mcp-tools.test.ts     # MCP tools integration tests
 ```
 
 ## Roadmap
 
-### v1.0 (Planned)
-- [ ] Automatic editor switch detection
-- [ ] Dedicated Cursor/Windsurf adapters
-- [ ] Seamless mode (auto-load)
+### v1.0 ✅ (Current)
+- [x] Natural language commands (`ctx`)
+- [x] Automation settings (autoLoad, autoSave, autoSync)
+- [x] Session start with auto-load
+- [x] Auto-sync engine (editor switch, file save, Git commit)
+- [x] Context summarization
 
 ### v2.0 (Planned)
 - [ ] Team sync (Git-based)
