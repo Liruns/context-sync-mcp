@@ -32,6 +32,9 @@ Context Sync MCP는 Cursor, Claude Code, Windsurf 등 여러 AI 코딩 도구에
 | 에이전트 인수인계 | AI 간 seamless 핸드오프 |
 | 스냅샷 | 특정 시점 상태 저장 및 복원 |
 | 자동 동기화 | 파일 저장, 에디터 전환, Git 커밋 시 자동 동기화 |
+| Diff/Merge | 스냅샷 간 변경사항 비교 및 병합 |
+| 검색 | 결정, 접근법, 블로커 등 전문 검색 |
+| 메트릭 | 동기화 성능 및 작업 통계 추적 |
 
 ## 설치
 
@@ -174,7 +177,7 @@ Windsurf 설정에서 MCP 서버 추가:
 > automation_config autoLoad: true, autoSync: true
 ```
 
-## 사용 가능한 도구 (17개)
+## 사용 가능한 도구 (21개)
 
 ### 자연어 & 자동화
 
@@ -217,6 +220,15 @@ Windsurf 설정에서 MCP 서버 추가:
 | `sync_start` | 자동 동기화 시작 | - |
 | `sync_stop` | 자동 동기화 중지 | - |
 | `sync_status` | 동기화 상태 조회 | - |
+
+### 고급 기능 (신규!)
+
+| 도구 | 설명 | 필수 파라미터 |
+|------|------|--------------|
+| `context_diff` | 스냅샷 간 변경사항 비교 | - |
+| `context_merge` | 스냅샷 병합 | `snapshotId` |
+| `context_search` | 컨텍스트 내 검색 | `query` |
+| `metrics_report` | 성능 메트릭 리포트 | - |
 
 ## 저장 위치
 
@@ -274,20 +286,32 @@ src/
 │   └── editor-watcher.ts # 에디터 전환 감지
 ├── utils/
 │   └── summarizer.ts     # 컨텍스트 요약기
+├── diff/
+│   └── context-diff.ts   # Diff/Merge 엔진
+├── search/
+│   └── context-search.ts # 검색 엔진
+├── metrics/
+│   └── metrics-collector.ts # 메트릭 수집기
 └── types/
     └── context.ts        # 타입 정의
 ```
 
 ## 로드맵
 
-### v1.0 ✅ (현재)
+### v0.2.0 ✅
 - [x] 자연어 명령 (`ctx`)
 - [x] 자동화 설정 (autoLoad, autoSave, autoSync)
 - [x] 세션 시작 시 자동 로드
 - [x] 자동 동기화 엔진 (에디터 전환, 파일 저장, Git 커밋)
 - [x] 컨텍스트 요약
 
-### v2.0 (예정)
+### v0.3.0 ✅ (현재)
+- [x] Diff/Merge 엔진 (스냅샷 비교 및 병합)
+- [x] 컨텍스트 검색 (결정, 접근법, 블로커 검색)
+- [x] 성능 메트릭 리포트
+- [x] 코드 품질 개선 (타입 안전성, 에러 처리)
+
+### v1.0 (예정)
 - [ ] 팀 동기화 (Git 기반)
 - [ ] 클라우드 백업
 - [ ] 충돌 해결 UI

@@ -32,6 +32,9 @@ Context Sync MCP is an MCP (Model Context Protocol) server that enables seamless
 | Agent Handoff | Seamless handoff between AI agents |
 | Snapshots | Save and restore state at specific points |
 | Auto-Sync | Automatic sync on file save, editor switch, Git commit |
+| Diff/Merge | Compare and merge snapshots |
+| Search | Full-text search across decisions, approaches, blockers |
+| Metrics | Track sync performance and work statistics |
 
 ## Installation
 
@@ -174,7 +177,7 @@ Use `automation_config` tool to view/modify:
 > automation_config autoLoad: true, autoSync: true
 ```
 
-## Available Tools (17)
+## Available Tools (21)
 
 ### Natural Language & Automation
 
@@ -217,6 +220,15 @@ Use `automation_config` tool to view/modify:
 | `sync_start` | Start auto-sync | - |
 | `sync_stop` | Stop auto-sync | - |
 | `sync_status` | Check sync status | - |
+
+### Advanced Features (New!)
+
+| Tool | Description | Required Parameters |
+|------|-------------|---------------------|
+| `context_diff` | Compare snapshots | - |
+| `context_merge` | Merge snapshots | `snapshotId` |
+| `context_search` | Search within context | `query` |
+| `metrics_report` | Performance metrics report | - |
 
 ## Storage Location
 
@@ -274,20 +286,32 @@ src/
 │   └── editor-watcher.ts # Editor switch detection
 ├── utils/
 │   └── summarizer.ts     # Context summarizer
+├── diff/
+│   └── context-diff.ts   # Diff/Merge engine
+├── search/
+│   └── context-search.ts # Search engine
+├── metrics/
+│   └── metrics-collector.ts # Metrics collector
 └── types/
     └── context.ts        # Type definitions
 ```
 
 ## Roadmap
 
-### v1.0 ✅ (Current)
+### v0.2.0 ✅
 - [x] Natural language commands (`ctx`)
 - [x] Automation settings (autoLoad, autoSave, autoSync)
 - [x] Session start with auto-load
 - [x] Auto-sync engine (editor switch, file save, Git commit)
 - [x] Context summarization
 
-### v2.0 (Planned)
+### v0.3.0 ✅ (Current)
+- [x] Diff/Merge engine (compare and merge snapshots)
+- [x] Context search (search decisions, approaches, blockers)
+- [x] Performance metrics report
+- [x] Code quality improvements (type safety, error handling)
+
+### v1.0 (Planned)
 - [ ] Team sync (Git-based)
 - [ ] Cloud backup
 - [ ] Conflict resolution UI
