@@ -1,0 +1,76 @@
+{
+  "mcpServers": {
+    "_comment": "활성화된 MCP 서버. /setup mcp 명령으로 자동 설정 가능"
+  },
+  "availableServers": {
+    "github": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-server-github"],
+      "env": {
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "description": "GitHub 연동 (이슈, PR, 코드 검색)",
+      "required_env": ["GITHUB_TOKEN"]
+    },
+    "postgres": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-postgres-server"],
+      "env": {
+        "DATABASE_URL": "${DATABASE_URL}"
+      },
+      "description": "PostgreSQL 데이터베이스",
+      "required_env": ["DATABASE_URL"]
+    },
+    "sqlite": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-sqlite-server", "${SQLITE_PATH:-./data.db}"],
+      "description": "SQLite 데이터베이스"
+    },
+    "filesystem": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-filesystem-server", "${FS_ALLOWED_PATH:-.}"],
+      "description": "파일 시스템 확장 접근"
+    },
+    "puppeteer": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-puppeteer-server"],
+      "description": "브라우저 자동화 (스크린샷, 크롤링)"
+    },
+    "fetch": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-fetch-server"],
+      "description": "HTTP 요청 (API 호출)"
+    },
+    "memory": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-memory-server"],
+      "description": "영구 메모리 저장소"
+    },
+    "sequential-thinking": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-sequential-thinking-server"],
+      "description": "순차적 사고 지원"
+    },
+    "sentry": {
+      "type": "http",
+      "url": "https://mcp.sentry.dev/mcp",
+      "description": "Sentry 에러 모니터링"
+    }
+  },
+  "recommendedByStack": {
+    "web": ["github", "fetch", "puppeteer"],
+    "backend": ["github", "postgres", "fetch"],
+    "fullstack": ["github", "postgres", "fetch", "puppeteer"],
+    "data": ["postgres", "sqlite", "fetch"],
+    "minimal": ["github", "fetch"]
+  },
+  "setupCommand": "python .claude/scripts/setup-mcp.py"
+}
