@@ -50,6 +50,90 @@ const DEFAULT_CONFIG: ContextSyncConfig = {
   },
 };
 
+/** 설정 검증 결과 */
+export interface ConfigValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+/** 설정 검증 상수 */
+const CONFIG_LIMITS = {
+  MIN_IDLE_MINUTES: 1,
+  MAX_IDLE_MINUTES: 60,
+  MIN_MAX_SNAPSHOTS: 1,
+  MAX_MAX_SNAPSHOTS: 1000,
+  VALID_SYNC_MODES: ["seamless", "ask", "manual"] as const,
+  VALID_COMPRESSION_LEVELS: ["none", "low", "medium", "high"] as const,
+} as const;
+
+/**
+ * 설정 검증 함수
+ */
+function validateConfig(config: Partial<ContextSyncConfig>): ConfigValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  // triggers 검증
+  if (config.triggers) {
+    const { idleMinutes } = config.triggers;
+    if (idleMinutes !== undefined) {
+      if (typeof idleMinutes !== "number" || !Number.isInteger(idleMinutes)) {
+        errors.push("triggers.idleMinutes는 정수여야 합니다");
+      } else if (idleMinutes < CONFIG_LIMITS.MIN_IDLE_MINUTES) {
+        errors.push(`triggers.idleMinutes는 ${CONFIG_LIMITS.MIN_IDLE_MINUTES}분 이상이어야 합니다`);
+      } else if (idleMinutes > CONFIG_LIMITS.MAX_IDLE_MINUTES) {
+        warnings.push(`triggers.idleMinutes가 ${CONFIG_LIMITS.MAX_IDLE_MINUTES}분을 초과합니다. 권장하지 않습니다`);
+      }
+    }
+  }
+
+  // storage 검증
+  if (config.storage) {
+    const { maxSnapshots, compressionLevel, location } = config.storage;
+
+    if (maxSnapshots !== undefined) {
+      if (typeof maxSnapshots !== "number" || !Number.isInteger(maxSnapshots)) {
+        errors.push("storage.maxSnapshots는 정수여야 합니다");
+      } else if (maxSnapshots < CONFIG_LIMITS.MIN_MAX_SNAPSHOTS) {
+        errors.push(`storage.maxSnapshots는 ${CONFIG_LIMITS.MIN_MAX_SNAPSHOTS} 이상이어야 합니다`);
+      } else if (maxSnapshots > CONFIG_LIMITS.MAX_MAX_SNAPSHOTS) {
+        warnings.push(`storage.maxSnapshots가 ${CONFIG_LIMITS.MAX_MAX_SNAPSHOTS}을 초과합니다. 디스크 공간에 주의하세요`);
+      }
+    }
+
+    if (compressionLevel !== undefined) {
+      if (!CONFIG_LIMITS.VALID_COMPRESSION_LEVELS.includes(compressionLevel as typeof CONFIG_LIMITS.VALID_COMPRESSION_LEVELS[number])) {
+        errors.push(`storage.compressionLevel은 ${CONFIG_LIMITS.VALID_COMPRESSION_LEVELS.join(", ")} 중 하나여야 합니다`);
+      }
+    }
+
+    if (location !== undefined && typeof location !== "string") {
+      errors.push("storage.location은 문자열이어야 합니다");
+    }
+  }
+
+  // syncMode 검증
+  if (config.syncMode !== undefined) {
+    if (!CONFIG_LIMITS.VALID_SYNC_MODES.includes(config.syncMode as typeof CONFIG_LIMITS.VALID_SYNC_MODES[number])) {
+      errors.push(`syncMode는 ${CONFIG_LIMITS.VALID_SYNC_MODES.join(", ")} 중 하나여야 합니다`);
+    }
+  }
+
+  // privacy 검증
+  if (config.privacy) {
+    if (config.privacy.excludePatterns !== undefined && !Array.isArray(config.privacy.excludePatterns)) {
+      errors.push("privacy.excludePatterns는 배열이어야 합니다");
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings,
+  };
+}
+
 /**
  * 컨텍스트 저장소 클래스
  */
@@ -93,12 +177,30 @@ export class ContextStore {
 
   /**
    * 설정 업데이트
+   * @throws 설정 검증 실패 시 에러 발생
    */
-  async updateConfig(updates: Partial<ContextSyncConfig>): Promise<ContextSyncConfig> {
+  async updateConfig(updates: Partial<ContextSyncConfig>): Promise<{ config: ContextSyncConfig; warnings: string[] }> {
+    // 설정 검증
+    const validation = validateConfig(updates);
+    if (!validation.valid) {
+      throw new Error(`설정 검증 실패: ${validation.errors.join(", ")}`);
+    }
+
     this.config = { ...this.config, ...updates };
     const configPath = path.join(this.storePath, "config.json");
     await fs.writeFile(configPath, JSON.stringify(this.config, null, 2));
-    return this.config;
+
+    return {
+      config: this.config,
+      warnings: validation.warnings,
+    };
+  }
+
+  /**
+   * 설정 검증만 수행 (저장하지 않음)
+   */
+  validateConfigUpdate(updates: Partial<ContextSyncConfig>): ConfigValidationResult {
+    return validateConfig(updates);
   }
 
   /**
@@ -206,7 +308,7 @@ export class ContextStore {
    */
   async addDecision(what: string, why: string, agent: AgentType = "unknown"): Promise<Decision> {
     if (!this.currentContext) {
-      throw new Error("No active context");
+      throw new Error("활성 컨텍스트가 없습니다");
     }
 
     const decision: Decision = {
@@ -235,7 +337,7 @@ export class ContextStore {
     agent: AgentType = "unknown"
   ): Promise<Approach> {
     if (!this.currentContext) {
-      throw new Error("No active context");
+      throw new Error("활성 컨텍스트가 없습니다");
     }
 
     const approach: Approach = {
@@ -260,7 +362,7 @@ export class ContextStore {
    */
   async addBlocker(description: string): Promise<Blocker> {
     if (!this.currentContext) {
-      throw new Error("No active context");
+      throw new Error("활성 컨텍스트가 없습니다");
     }
 
     const blocker: Blocker = {
@@ -309,7 +411,7 @@ export class ContextStore {
    */
   async recordHandoff(from: AgentType, to: AgentType, summary: string): Promise<AgentHandoff> {
     if (!this.currentContext) {
-      throw new Error("No active context");
+      throw new Error("활성 컨텍스트가 없습니다");
     }
 
     const handoff: AgentHandoff = {
@@ -390,21 +492,32 @@ export class ContextStore {
 
       for (const file of files) {
         if (file.endsWith(".json")) {
-          const data = await fs.readFile(path.join(snapshotsDir, file), "utf-8");
-          snapshots.push(JSON.parse(data));
+          try {
+            const data = await fs.readFile(path.join(snapshotsDir, file), "utf-8");
+            snapshots.push(JSON.parse(data));
+          } catch (parseErr) {
+            // 손상된 스냅샷 파일 무시 (로깅만)
+            console.warn(`스냅샷 파일 읽기 실패: ${file}`, parseErr);
+          }
         }
       }
 
       return snapshots.sort(
         (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
       );
-    } catch {
+    } catch (err) {
+      // 디렉토리가 없는 경우 빈 배열 반환
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return [];
+      }
+      console.error("스냅샷 목록 조회 실패:", err);
       return [];
     }
   }
 
   /**
    * 스냅샷에서 복원
+   * @throws 복원 실패 시 상세 에러 정보 포함
    */
   async restoreFromSnapshot(snapshotId: string): Promise<SharedContext | null> {
     const snapshotPath = path.join(
@@ -420,7 +533,15 @@ export class ContextStore {
       this.currentContext.updatedAt = new Date();
       await this.saveCurrentContext();
       return this.currentContext;
-    } catch {
+    } catch (err) {
+      const errCode = (err as NodeJS.ErrnoException).code;
+      if (errCode === "ENOENT") {
+        console.warn(`스냅샷을 찾을 수 없음: ${snapshotId}`);
+      } else if (err instanceof SyntaxError) {
+        console.error(`스냅샷 JSON 파싱 실패: ${snapshotId}`, err);
+      } else {
+        console.error(`스냅샷 복원 실패: ${snapshotId}`, err);
+      }
       return null;
     }
   }
@@ -486,57 +607,121 @@ ${ctx.codeChanges.modifiedFiles.join(", ") || "없음"}
 
   /**
    * 오래된 스냅샷 정리
+   * @returns 삭제된 스냅샷 수와 실패한 삭제 수
    */
-  private async cleanupOldSnapshots(): Promise<void> {
-    const snapshots = await this.listSnapshots();
-    if (snapshots.length <= this.config.storage.maxSnapshots) {
-      return;
+  private async cleanupOldSnapshots(): Promise<{ deleted: number; failed: number }> {
+    const result = { deleted: 0, failed: 0 };
+
+    try {
+      const snapshots = await this.listSnapshots();
+      if (snapshots.length <= this.config.storage.maxSnapshots) {
+        return result;
+      }
+
+      const toDelete = snapshots.slice(this.config.storage.maxSnapshots);
+      for (const snapshot of toDelete) {
+        const snapshotPath = path.join(
+          this.storePath,
+          "snapshots",
+          `${snapshot.id}.json`
+        );
+        try {
+          await fs.unlink(snapshotPath);
+          result.deleted++;
+        } catch (err) {
+          result.failed++;
+          // 파일이 이미 없는 경우는 무시, 그 외는 로깅
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+            console.error(`스냅샷 삭제 실패: ${snapshotPath}`, err);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("스냅샷 정리 중 오류 발생:", err);
     }
 
-    const toDelete = snapshots.slice(this.config.storage.maxSnapshots);
-    for (const snapshot of toDelete) {
-      const snapshotPath = path.join(
-        this.storePath,
-        "snapshots",
-        `${snapshot.id}.json`
-      );
-      await fs.unlink(snapshotPath).catch(() => {});
-    }
+    return result;
   }
 
   /**
    * 컨텍스트 역직렬화 (Date 객체 복원)
+   * @throws 필수 필드가 없거나 형식이 잘못된 경우 에러 발생
    */
   private deserializeContext(data: Record<string, unknown>): SharedContext {
+    // 필수 필드 검증
+    this.validateRequiredFields(data, ["id", "projectPath", "createdAt", "updatedAt", "currentWork", "conversationSummary", "codeChanges", "agentChain", "version"]);
+
+    const currentWork = data.currentWork as Record<string, unknown>;
+    this.validateRequiredFields(currentWork, ["goal", "status", "startedAt", "lastActiveAt"]);
+
+    const conversationSummary = data.conversationSummary as Record<string, unknown>;
+    this.validateRequiredFields(conversationSummary, ["keyDecisions", "triedApproaches", "blockers", "nextSteps"]);
+
+    // 안전한 배열 변환 헬퍼
+    const safeArray = <T>(arr: unknown): T[] => {
+      return Array.isArray(arr) ? arr : [];
+    };
+
+    // 안전한 Date 변환 헬퍼
+    const safeDate = (value: unknown): Date => {
+      if (value instanceof Date) return value;
+      if (typeof value === "string" || typeof value === "number") {
+        const date = new Date(value);
+        if (!isNaN(date.getTime())) return date;
+      }
+      return new Date(); // 기본값
+    };
+
     return {
-      ...data,
-      createdAt: new Date(data.createdAt as string),
-      updatedAt: new Date(data.updatedAt as string),
+      id: String(data.id),
+      projectPath: String(data.projectPath),
+      version: Number(data.version) || 1,
+      createdAt: safeDate(data.createdAt),
+      updatedAt: safeDate(data.updatedAt),
       currentWork: {
-        ...(data.currentWork as Record<string, unknown>),
-        startedAt: new Date((data.currentWork as Record<string, unknown>).startedAt as string),
-        lastActiveAt: new Date((data.currentWork as Record<string, unknown>).lastActiveAt as string),
+        goal: String(currentWork.goal),
+        status: currentWork.status as SharedContext["currentWork"]["status"],
+        startedAt: safeDate(currentWork.startedAt),
+        lastActiveAt: safeDate(currentWork.lastActiveAt),
+        activeFiles: safeArray<string>(currentWork.activeFiles),
       },
       conversationSummary: {
-        ...(data.conversationSummary as Record<string, unknown>),
-        keyDecisions: ((data.conversationSummary as Record<string, unknown>).keyDecisions as Decision[]).map((d) => ({
+        keyDecisions: safeArray<Decision>(conversationSummary.keyDecisions).map((d) => ({
           ...d,
-          timestamp: new Date(d.timestamp),
+          timestamp: safeDate(d.timestamp),
         })),
-        triedApproaches: ((data.conversationSummary as Record<string, unknown>).triedApproaches as Approach[]).map((a) => ({
+        triedApproaches: safeArray<Approach>(conversationSummary.triedApproaches).map((a) => ({
           ...a,
-          timestamp: new Date(a.timestamp),
+          timestamp: safeDate(a.timestamp),
         })),
-        blockers: ((data.conversationSummary as Record<string, unknown>).blockers as Blocker[]).map((b) => ({
+        blockers: safeArray<Blocker>(conversationSummary.blockers).map((b) => ({
           ...b,
-          discoveredAt: new Date(b.discoveredAt),
-          resolvedAt: b.resolvedAt ? new Date(b.resolvedAt) : undefined,
+          discoveredAt: safeDate(b.discoveredAt),
+          resolvedAt: b.resolvedAt ? safeDate(b.resolvedAt) : undefined,
         })),
+        nextSteps: safeArray<string>(conversationSummary.nextSteps),
       },
-      agentChain: (data.agentChain as AgentHandoff[]).map((h) => ({
+      codeChanges: {
+        modifiedFiles: safeArray<string>((data.codeChanges as Record<string, unknown>)?.modifiedFiles),
+        summary: String((data.codeChanges as Record<string, unknown>)?.summary || ""),
+        uncommittedChanges: Boolean((data.codeChanges as Record<string, unknown>)?.uncommittedChanges),
+        lastCommitHash: (data.codeChanges as Record<string, unknown>)?.lastCommitHash as string | undefined,
+      },
+      agentChain: safeArray<AgentHandoff>(data.agentChain).map((h) => ({
         ...h,
-        timestamp: new Date(h.timestamp),
+        timestamp: safeDate(h.timestamp),
       })),
-    } as SharedContext;
+    };
+  }
+
+  /**
+   * 필수 필드 검증 헬퍼
+   */
+  private validateRequiredFields(obj: Record<string, unknown>, fields: string[]): void {
+    for (const field of fields) {
+      if (!(field in obj) || obj[field] === undefined) {
+        throw new Error(`필수 필드 누락: ${field}`);
+      }
+    }
   }
 }

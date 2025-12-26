@@ -13,6 +13,24 @@ import type { EditorSwitchEvent } from "../watcher/index.js";
 
 const execAsync = promisify(exec);
 
+/** 상수 정의 */
+const CONSTANTS = {
+  /** 에디터 감시 간격 (ms) */
+  EDITOR_WATCH_INTERVAL_MS: 2000,
+  /** Git 커밋 감지 간격 (ms) */
+  GIT_CHECK_INTERVAL_MS: 5000,
+  /** Git 명령 타임아웃 (ms) */
+  GIT_COMMAND_TIMEOUT_MS: 5000,
+  /** 유휴 상태 체크 간격 (ms) */
+  IDLE_CHECK_INTERVAL_MS: 60000,
+  /** 파일 변경 디바운스 시간 (ms) */
+  FILE_DEBOUNCE_MS: 1000,
+  /** 파일 쓰기 안정화 대기 시간 (ms) */
+  FILE_STABILITY_THRESHOLD_MS: 500,
+  /** 파일 쓰기 폴링 간격 (ms) */
+  FILE_POLL_INTERVAL_MS: 100,
+} as const;
+
 /** 동기화 트리거 타입 */
 export type SyncTriggerType =
   | "editor_switch"
@@ -73,6 +91,10 @@ export class SyncEngine extends EventEmitter {
   private projectPath: string;
   private isRunning: boolean = false;
   private lastActivity: Date = new Date();
+  private isGitChecking: boolean = false;
+  // 파일 감시 관련 (메모리 누수 방지를 위해 클래스 필드로 관리)
+  private fileDebounceTimer: NodeJS.Timeout | null = null;
+  private changedFiles: Set<string> = new Set();
 
   constructor(
     store: ContextStore,
@@ -142,7 +164,15 @@ export class SyncEngine extends EventEmitter {
       this.gitCheckInterval = null;
     }
 
+    // 파일 디바운스 타이머 정리 (메모리 누수 방지)
+    if (this.fileDebounceTimer) {
+      clearTimeout(this.fileDebounceTimer);
+      this.fileDebounceTimer = null;
+    }
+    this.changedFiles.clear();
+
     this.isRunning = false;
+    this.isGitChecking = false;
     this.emit("stopped");
   }
 
@@ -175,7 +205,7 @@ export class SyncEngine extends EventEmitter {
    * 에디터 감시 시작
    */
   private startEditorWatcher(): void {
-    this.editorWatcher = new EditorWatcher(2000);
+    this.editorWatcher = new EditorWatcher(CONSTANTS.EDITOR_WATCH_INTERVAL_MS);
 
     this.editorWatcher.on("switch", async (event: EditorSwitchEvent) => {
       if (event.from !== "unknown") {
@@ -207,26 +237,26 @@ export class SyncEngine extends EventEmitter {
       persistent: true,
       ignoreInitial: true,
       awaitWriteFinish: {
-        stabilityThreshold: 500,
-        pollInterval: 100,
+        stabilityThreshold: CONSTANTS.FILE_STABILITY_THRESHOLD_MS,
+        pollInterval: CONSTANTS.FILE_POLL_INTERVAL_MS,
       },
     });
 
-    // 디바운스를 위한 변수
-    let debounceTimer: NodeJS.Timeout | null = null;
-    const changedFiles: Set<string> = new Set();
+    // 클래스 필드 초기화
+    this.changedFiles.clear();
 
     const handleChange = (filePath: string) => {
-      changedFiles.add(filePath);
+      this.changedFiles.add(filePath);
       this.recordActivity();
 
-      if (debounceTimer) {
-        clearTimeout(debounceTimer);
+      if (this.fileDebounceTimer) {
+        clearTimeout(this.fileDebounceTimer);
       }
 
-      debounceTimer = setTimeout(async () => {
-        const files = Array.from(changedFiles);
-        changedFiles.clear();
+      this.fileDebounceTimer = setTimeout(async () => {
+        const files = Array.from(this.changedFiles);
+        this.changedFiles.clear();
+        this.fileDebounceTimer = null;
 
         await this.onSync({
           type: "file_save",
@@ -236,7 +266,7 @@ export class SyncEngine extends EventEmitter {
             count: files.length,
           },
         });
-      }, 1000);
+      }, CONSTANTS.FILE_DEBOUNCE_MS);
     };
 
     this.fileWatcher.on("change", handleChange);
@@ -269,7 +299,7 @@ export class SyncEngine extends EventEmitter {
         // 유휴 동기화 후 타이머 리셋
         this.lastActivity = now;
       }
-    }, 60000); // 1분마다 체크
+    }, CONSTANTS.IDLE_CHECK_INTERVAL_MS);
   }
 
   /**
@@ -280,6 +310,7 @@ export class SyncEngine extends EventEmitter {
     try {
       const { stdout } = await execAsync("git rev-parse HEAD", {
         cwd: this.projectPath,
+        timeout: CONSTANTS.GIT_COMMAND_TIMEOUT_MS,
       });
       this.lastGitCommit = stdout.trim();
     } catch {
@@ -287,36 +318,55 @@ export class SyncEngine extends EventEmitter {
       return;
     }
 
-    // 5초마다 새 커밋 체크
-    this.gitCheckInterval = setInterval(async () => {
-      try {
-        const { stdout } = await execAsync("git rev-parse HEAD", {
-          cwd: this.projectPath,
+    // Git 커밋 체크 (race condition 방지)
+    this.gitCheckInterval = setInterval(() => {
+      this.checkGitCommit().catch((err) => {
+        this.emit("error", { source: "git_watcher", error: err });
+      });
+    }, CONSTANTS.GIT_CHECK_INTERVAL_MS);
+  }
+
+  /**
+   * Git 커밋 체크 (race condition 방지)
+   */
+  private async checkGitCommit(): Promise<void> {
+    // 이미 체크 중이면 스킵
+    if (this.isGitChecking) {
+      return;
+    }
+
+    this.isGitChecking = true;
+    try {
+      const { stdout } = await execAsync("git rev-parse HEAD", {
+        cwd: this.projectPath,
+        timeout: CONSTANTS.GIT_COMMAND_TIMEOUT_MS,
+      });
+      const currentCommit = stdout.trim();
+
+      if (currentCommit !== this.lastGitCommit) {
+        const { stdout: commitMsg } = await execAsync(
+          "git log -1 --pretty=%B",
+          { cwd: this.projectPath, timeout: CONSTANTS.GIT_COMMAND_TIMEOUT_MS }
+        );
+
+        await this.onSync({
+          type: "git_commit",
+          timestamp: new Date(),
+          details: {
+            commitHash: currentCommit,
+            message: commitMsg.trim(),
+            previousHash: this.lastGitCommit,
+          },
         });
-        const currentCommit = stdout.trim();
 
-        if (currentCommit !== this.lastGitCommit) {
-          const { stdout: commitMsg } = await execAsync(
-            "git log -1 --pretty=%B",
-            { cwd: this.projectPath }
-          );
-
-          await this.onSync({
-            type: "git_commit",
-            timestamp: new Date(),
-            details: {
-              commitHash: currentCommit,
-              message: commitMsg.trim(),
-              previousHash: this.lastGitCommit,
-            },
-          });
-
-          this.lastGitCommit = currentCommit;
-        }
-      } catch {
-        // 무시
+        this.lastGitCommit = currentCommit;
       }
-    }, 5000);
+    } catch (err) {
+      // Git 명령 실패 시 에러 이벤트 발생
+      this.emit("error", { source: "git_check", error: err });
+    } finally {
+      this.isGitChecking = false;
+    }
   }
 
   /**

@@ -149,7 +149,7 @@ describe("ContextStore", () => {
     it("컨텍스트가 없으면 에러를 던져야 함", async () => {
       const newStore = new ContextStore(path.join(TEST_PROJECT_PATH, "empty2"));
       await newStore.initialize();
-      await expect(newStore.addDecision("test", "test")).rejects.toThrow("No active context");
+      await expect(newStore.addDecision("test", "test")).rejects.toThrow("활성 컨텍스트가 없습니다");
     });
   });
 

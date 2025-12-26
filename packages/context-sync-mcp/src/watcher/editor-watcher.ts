@@ -10,6 +10,16 @@ import type { AgentType } from "../types/index.js";
 
 const execAsync = promisify(exec);
 
+/** 상수 정의 */
+const CONSTANTS = {
+  /** 기본 감시 간격 (ms) */
+  DEFAULT_INTERVAL_MS: 2000,
+  /** 명령 실행 타임아웃 (ms) */
+  COMMAND_TIMEOUT_MS: 5000,
+  /** 최대 연속 에러 허용 횟수 */
+  MAX_CONSECUTIVE_ERRORS: 5,
+} as const;
+
 /** 에디터 프로세스 매핑 */
 const EDITOR_PROCESSES: Record<string, AgentType> = {
   // Windows
@@ -30,6 +40,14 @@ export interface EditorSwitchEvent {
   timestamp: Date;
 }
 
+/** 에러 정보 */
+export interface EditorWatcherError {
+  source: "windows" | "macos" | "linux" | "detection";
+  message: string;
+  originalError?: unknown;
+  timestamp: Date;
+}
+
 /**
  * 에디터 감시 클래스
  */
@@ -39,10 +57,26 @@ export class EditorWatcher extends EventEmitter {
   private checkInterval: NodeJS.Timeout | null = null;
   private intervalMs: number;
   private isRunning: boolean = false;
+  private lastError: EditorWatcherError | null = null;
+  private consecutiveErrors: number = 0;
 
-  constructor(intervalMs: number = 2000) {
+  constructor(intervalMs: number = CONSTANTS.DEFAULT_INTERVAL_MS) {
     super();
     this.intervalMs = intervalMs;
+  }
+
+  /**
+   * 마지막 에러 반환
+   */
+  getLastError(): EditorWatcherError | null {
+    return this.lastError;
+  }
+
+  /**
+   * 연속 에러 횟수 반환
+   */
+  getConsecutiveErrorCount(): number {
+    return this.consecutiveErrors;
   }
 
   /**
@@ -125,14 +159,36 @@ export class EditorWatcher extends EventEmitter {
     const platform = process.platform;
 
     try {
+      let result: AgentType;
       if (platform === "win32") {
-        return await this.detectWindowsActiveEditor();
+        result = await this.detectWindowsActiveEditor();
       } else if (platform === "darwin") {
-        return await this.detectMacOSActiveEditor();
+        result = await this.detectMacOSActiveEditor();
       } else {
-        return await this.detectLinuxActiveEditor();
+        result = await this.detectLinuxActiveEditor();
       }
-    } catch {
+
+      // 성공 시 연속 에러 카운트 리셋
+      this.consecutiveErrors = 0;
+      return result;
+    } catch (err) {
+      this.consecutiveErrors++;
+      this.lastError = {
+        source: "detection",
+        message: `에디터 감지 실패 (${platform})`,
+        originalError: err,
+        timestamp: new Date(),
+      };
+
+      // 연속 에러가 임계값을 초과하면 경고 이벤트 발생
+      if (this.consecutiveErrors >= CONSTANTS.MAX_CONSECUTIVE_ERRORS) {
+        this.emit("warning", {
+          type: "consecutive_errors",
+          count: this.consecutiveErrors,
+          lastError: this.lastError,
+        });
+      }
+
       return "unknown";
     }
   }
@@ -145,7 +201,7 @@ export class EditorWatcher extends EventEmitter {
       // PowerShell로 활성 윈도우 프로세스 이름 가져오기
       const { stdout } = await execAsync(
         `powershell -Command "(Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1 ProcessName).ProcessName"`,
-        { timeout: 5000 }
+        { timeout: CONSTANTS.COMMAND_TIMEOUT_MS }
       );
 
       const processName = stdout.trim().toLowerCase();
@@ -158,8 +214,14 @@ export class EditorWatcher extends EventEmitter {
       }
 
       return "unknown";
-    } catch {
-      return "unknown";
+    } catch (err) {
+      this.lastError = {
+        source: "windows",
+        message: "Windows 에디터 감지 실패",
+        originalError: err,
+        timestamp: new Date(),
+      };
+      throw err; // 상위로 전파하여 detectActiveEditor에서 처리
     }
   }
 
@@ -170,7 +232,7 @@ export class EditorWatcher extends EventEmitter {
     try {
       const { stdout } = await execAsync(
         `osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true'`,
-        { timeout: 5000 }
+        { timeout: CONSTANTS.COMMAND_TIMEOUT_MS }
       );
 
       const appName = stdout.trim().toLowerCase();
@@ -180,8 +242,14 @@ export class EditorWatcher extends EventEmitter {
       if (appName.includes("windsurf")) return "windsurf";
 
       return "unknown";
-    } catch {
-      return "unknown";
+    } catch (err) {
+      this.lastError = {
+        source: "macos",
+        message: "macOS 에디터 감지 실패",
+        originalError: err,
+        timestamp: new Date(),
+      };
+      throw err;
     }
   }
 
@@ -193,7 +261,7 @@ export class EditorWatcher extends EventEmitter {
       // xdotool로 활성 윈도우 이름 가져오기
       const { stdout } = await execAsync(
         `xdotool getactivewindow getwindowpid 2>/dev/null | xargs -I{} ps -p {} -o comm=`,
-        { timeout: 5000 }
+        { timeout: CONSTANTS.COMMAND_TIMEOUT_MS }
       );
 
       const processName = stdout.trim().toLowerCase();
@@ -205,8 +273,14 @@ export class EditorWatcher extends EventEmitter {
       }
 
       return "unknown";
-    } catch {
-      return "unknown";
+    } catch (err) {
+      this.lastError = {
+        source: "linux",
+        message: "Linux 에디터 감지 실패 (xdotool 필요)",
+        originalError: err,
+        timestamp: new Date(),
+      };
+      throw err;
     }
   }
 }

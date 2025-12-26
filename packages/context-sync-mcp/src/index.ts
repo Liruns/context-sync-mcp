@@ -15,7 +15,10 @@ import {
 import { ContextStore } from "./store/index.js";
 import { SyncEngine } from "./sync/index.js";
 import { ContextSummarizer } from "./utils/index.js";
-import type { AgentType, WorkStatus } from "./types/index.js";
+import { ContextDiffEngine } from "./diff/index.js";
+import { MetricsCollector } from "./metrics/index.js";
+import { ContextSearchEngine } from "./search/index.js";
+import type { AgentType, WorkStatus, SharedContext } from "./types/index.js";
 
 // 현재 작업 디렉토리
 const PROJECT_PATH = process.cwd();
@@ -25,6 +28,11 @@ const store = new ContextStore(PROJECT_PATH);
 
 // Phase 2: 동기화 엔진
 const syncEngine = new SyncEngine(store, PROJECT_PATH);
+
+// Phase 3: 고급 기능
+const diffEngine = new ContextDiffEngine();
+const metricsCollector = new MetricsCollector();
+const searchEngine = new ContextSearchEngine();
 
 // MCP 서버 생성
 const server = new Server(
@@ -350,6 +358,84 @@ const TOOLS: Tool[] = [
           type: "string",
           enum: ["claude-code", "cursor", "windsurf", "copilot"],
           description: "현재 AI 에이전트",
+        },
+      },
+    },
+  },
+  // Phase 3: 고급 기능 도구
+  {
+    name: "context_diff",
+    description: "두 스냅샷 간의 차이점을 비교합니다. 어떤 결정, 접근법, 블로커가 추가/수정/삭제되었는지 확인할 수 있습니다.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        snapshotId1: {
+          type: "string",
+          description: "첫 번째 스냅샷 ID (없으면 가장 오래된 스냅샷)",
+        },
+        snapshotId2: {
+          type: "string",
+          description: "두 번째 스냅샷 ID (없으면 현재 컨텍스트)",
+        },
+      },
+    },
+  },
+  {
+    name: "context_merge",
+    description: "두 컨텍스트를 병합합니다. 다른 브랜치에서 작업한 내용을 합칠 때 유용합니다.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        snapshotId: {
+          type: "string",
+          description: "병합할 스냅샷 ID",
+        },
+        strategy: {
+          type: "string",
+          enum: ["source_wins", "target_wins", "merge_all", "interactive"],
+          description: "병합 전략 (기본: merge_all)",
+          default: "merge_all",
+        },
+      },
+      required: ["snapshotId"],
+    },
+  },
+  {
+    name: "context_search",
+    description: "컨텍스트 내에서 키워드로 검색합니다. 결정, 접근법, 블로커, 파일, 다음 단계에서 검색합니다.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string",
+          description: "검색어",
+        },
+        category: {
+          type: "string",
+          enum: ["all", "decisions", "approaches", "blockers", "files", "nextSteps", "handoffs"],
+          description: "검색 범위 (기본: all)",
+          default: "all",
+        },
+        maxResults: {
+          type: "number",
+          description: "최대 결과 수 (기본: 10)",
+          default: 10,
+        },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "metrics_report",
+    description: "성능 메트릭 리포트를 생성합니다. 동기화 성능, 메모리 사용량, 작업 통계를 확인할 수 있습니다.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        format: {
+          type: "string",
+          enum: ["markdown", "json"],
+          description: "출력 형식 (기본: markdown)",
+          default: "markdown",
         },
       },
     },
@@ -860,6 +946,177 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         return {
           content: [{ type: "text", text: result }],
+        };
+      }
+
+      // Phase 3: 고급 기능 핸들러
+      case "context_diff": {
+        const { snapshotId1, snapshotId2 } = args as {
+          snapshotId1?: string;
+          snapshotId2?: string;
+        };
+
+        const snapshots = await store.listSnapshots();
+        let source: SharedContext | null = null;
+        let target: SharedContext | null = null;
+
+        // 첫 번째 스냅샷 (없으면 가장 오래된 스냅샷)
+        if (snapshotId1) {
+          const snapshot = snapshots.find((s) => s.id.startsWith(snapshotId1));
+          if (snapshot) source = snapshot.data;
+        } else if (snapshots.length > 0) {
+          source = snapshots[snapshots.length - 1].data;
+        }
+
+        // 두 번째 스냅샷 (없으면 현재 컨텍스트)
+        if (snapshotId2) {
+          const snapshot = snapshots.find((s) => s.id.startsWith(snapshotId2));
+          if (snapshot) target = snapshot.data;
+        } else {
+          target = await store.getContext();
+        }
+
+        if (!source || !target) {
+          return {
+            content: [{ type: "text", text: "비교할 컨텍스트가 충분하지 않습니다. 최소 2개의 스냅샷이 필요합니다." }],
+          };
+        }
+
+        const diff = diffEngine.compare(source, target);
+        const markdown = diffEngine.toMarkdown(diff);
+
+        // 메트릭 기록
+        metricsCollector.startOperation("diff-" + Date.now());
+        metricsCollector.endOperation("diff-" + Date.now(), "context_diff");
+
+        return {
+          content: [{ type: "text", text: markdown }],
+        };
+      }
+
+      case "context_merge": {
+        const { snapshotId, strategy = "merge_all" } = args as {
+          snapshotId: string;
+          strategy?: "source_wins" | "target_wins" | "merge_all" | "interactive";
+        };
+
+        const snapshots = await store.listSnapshots();
+        const snapshot = snapshots.find((s) => s.id.startsWith(snapshotId));
+
+        if (!snapshot) {
+          return {
+            content: [{ type: "text", text: `스냅샷을 찾을 수 없습니다: ${snapshotId}` }],
+          };
+        }
+
+        const currentContext = await store.getContext();
+        if (!currentContext) {
+          return {
+            content: [{ type: "text", text: "현재 활성 컨텍스트가 없습니다." }],
+          };
+        }
+
+        // 전략을 MergeOptions로 변환
+        const mergeOptions = {
+          conflictResolution: strategy === "source_wins" ? "source" as const : "target" as const,
+        };
+
+        const mergeResult = diffEngine.merge(snapshot.data, currentContext, mergeOptions);
+
+        if (!mergeResult.success || !mergeResult.merged) {
+          const conflictText = mergeResult.conflicts
+            .map((c) => `- ${c.path}: source(${JSON.stringify(c.sourceValue)}) vs target(${JSON.stringify(c.targetValue)})`)
+            .join("\n");
+          return {
+            content: [{
+              type: "text",
+              text: `병합 충돌이 발생했습니다:\n\n${conflictText}\n\n수동으로 해결이 필요합니다.`,
+            }],
+          };
+        }
+
+        // 병합된 컨텍스트 저장
+        await store.updateContext({
+          goal: mergeResult.merged.currentWork.goal,
+          status: mergeResult.merged.currentWork.status,
+          nextSteps: mergeResult.merged.conversationSummary.nextSteps,
+        });
+
+        // 메트릭 기록
+        metricsCollector.startOperation("merge-" + Date.now());
+        metricsCollector.endOperation("merge-" + Date.now(), "context_merge");
+
+        return {
+          content: [{
+            type: "text",
+            text: `병합이 완료되었습니다.\n\n- 결정: ${mergeResult.merged.conversationSummary.keyDecisions.length}개\n- 접근법: ${mergeResult.merged.conversationSummary.triedApproaches.length}개\n- 블로커: ${mergeResult.merged.conversationSummary.blockers.length}개`,
+          }],
+        };
+      }
+
+      case "context_search": {
+        const { query, category = "all", maxResults = 10 } = args as {
+          query: string;
+          category?: "all" | "decisions" | "approaches" | "blockers" | "files" | "nextSteps" | "handoffs";
+          maxResults?: number;
+        };
+
+        const context = await store.getContext();
+        if (!context) {
+          return {
+            content: [{ type: "text", text: "검색할 컨텍스트가 없습니다." }],
+          };
+        }
+
+        const searchResult = searchEngine.search(context, query, {
+          categories: category === "all" ? undefined : [category],
+          maxResults,
+        });
+
+        const markdown = searchEngine.toMarkdown(searchResult);
+
+        // 메트릭 기록
+        metricsCollector.startOperation("search-" + Date.now());
+        metricsCollector.endOperation("search-" + Date.now(), "context_search");
+
+        return {
+          content: [{ type: "text", text: markdown }],
+        };
+      }
+
+      case "metrics_report": {
+        const { format = "markdown" } = args as {
+          format?: "markdown" | "json";
+        };
+
+        // 현재 컨텍스트 정보 추가
+        const context = await store.getContext();
+        if (context) {
+          metricsCollector.recordContextSize(JSON.stringify(context).length);
+        }
+
+        const snapshots = await store.listSnapshots();
+        metricsCollector.recordSnapshotCount(snapshots.length);
+        metricsCollector.recordMemoryUsage();
+
+        const report = metricsCollector.generateReport();
+
+        // 컨텍스트 정보 보강
+        if (context) {
+          report.context.decisionsCount = context.conversationSummary.keyDecisions.length;
+          report.context.approachesCount = context.conversationSummary.triedApproaches.length;
+          report.context.blockersCount = context.conversationSummary.blockers.length;
+          report.context.unresolvedBlockersCount = context.conversationSummary.blockers.filter(b => !b.resolved).length;
+        }
+
+        if (format === "json") {
+          return {
+            content: [{ type: "text", text: JSON.stringify(report, null, 2) }],
+          };
+        }
+
+        return {
+          content: [{ type: "text", text: metricsCollector.toMarkdown(report) }],
         };
       }
 
