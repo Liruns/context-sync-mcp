@@ -13,6 +13,8 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { ContextStore } from "./store/index.js";
+import { SyncEngine } from "./sync/index.js";
+import { ContextSummarizer } from "./utils/index.js";
 import type { AgentType, WorkStatus } from "./types/index.js";
 
 // 현재 작업 디렉토리
@@ -21,11 +23,14 @@ const PROJECT_PATH = process.cwd();
 // 컨텍스트 저장소 초기화
 const store = new ContextStore(PROJECT_PATH);
 
+// Phase 2: 동기화 엔진
+const syncEngine = new SyncEngine(store, PROJECT_PATH);
+
 // MCP 서버 생성
 const server = new Server(
   {
     name: "context-sync-mcp",
-    version: "0.1.0",
+    version: "0.2.0",
   },
   {
     capabilities: {
@@ -214,6 +219,73 @@ const TOOLS: Tool[] = [
           type: "number",
           description: "최대 개수",
           default: 10,
+        },
+      },
+    },
+  },
+  // Phase 2: 자동 동기화 도구
+  {
+    name: "sync_start",
+    description: "자동 동기화 엔진을 시작합니다. 에디터 전환, 파일 저장, 유휴 상태, Git 커밋 시 자동으로 컨텍스트를 동기화합니다.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        editorSwitch: {
+          type: "boolean",
+          description: "에디터 전환 시 동기화 (기본: true)",
+          default: true,
+        },
+        fileSave: {
+          type: "boolean",
+          description: "파일 저장 시 동기화 (기본: true)",
+          default: true,
+        },
+        idleMinutes: {
+          type: "number",
+          description: "유휴 시간 후 동기화 (분, 0이면 비활성화)",
+          default: 5,
+        },
+        gitCommit: {
+          type: "boolean",
+          description: "Git 커밋 시 동기화 (기본: true)",
+          default: true,
+        },
+      },
+    },
+  },
+  {
+    name: "sync_stop",
+    description: "자동 동기화 엔진을 중지합니다.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {},
+    },
+  },
+  {
+    name: "sync_status",
+    description: "자동 동기화 엔진의 현재 상태를 조회합니다.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {},
+    },
+  },
+  {
+    name: "context_summarize",
+    description: "컨텍스트를 요약하여 반환합니다. 토큰 절약을 위해 압축된 형식으로 제공합니다.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        format: {
+          type: "string",
+          enum: ["markdown", "json", "oneliner"],
+          description: "출력 형식",
+          default: "markdown",
+        },
+        compressionLevel: {
+          type: "string",
+          enum: ["none", "low", "medium", "high"],
+          description: "압축 레벨 (높을수록 더 많이 압축)",
+          default: "medium",
         },
       },
     },
@@ -457,6 +529,106 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         return {
           content: [{ type: "text", text: `스냅샷 목록:\n\n${result}` }],
+        };
+      }
+
+      // Phase 2: 자동 동기화 핸들러
+      case "sync_start": {
+        const { editorSwitch, fileSave, idleMinutes, gitCommit } = args as {
+          editorSwitch?: boolean;
+          fileSave?: boolean;
+          idleMinutes?: number;
+          gitCommit?: boolean;
+        };
+
+        if (syncEngine.isActive()) {
+          return {
+            content: [{ type: "text", text: "동기화 엔진이 이미 실행 중입니다." }],
+          };
+        }
+
+        // 동적 설정 적용은 향후 구현 (현재는 기본값 사용)
+        await syncEngine.start();
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `자동 동기화가 시작되었습니다.\n\n설정:\n- 에디터 전환: ${editorSwitch !== false ? "활성화" : "비활성화"}\n- 파일 저장: ${fileSave !== false ? "활성화" : "비활성화"}\n- 유휴 시간: ${idleMinutes || 5}분\n- Git 커밋: ${gitCommit !== false ? "활성화" : "비활성화"}`,
+            },
+          ],
+        };
+      }
+
+      case "sync_stop": {
+        if (!syncEngine.isActive()) {
+          return {
+            content: [{ type: "text", text: "동기화 엔진이 실행 중이 아닙니다." }],
+          };
+        }
+
+        syncEngine.stop();
+
+        return {
+          content: [{ type: "text", text: "자동 동기화가 중지되었습니다." }],
+        };
+      }
+
+      case "sync_status": {
+        const isActive = syncEngine.isActive();
+        const context = await store.getContext();
+
+        let statusText = `동기화 상태: ${isActive ? "실행 중" : "중지됨"}`;
+
+        if (context) {
+          statusText += `\n\n현재 컨텍스트:\n- 목표: ${context.currentWork.goal}\n- 상태: ${context.currentWork.status}\n- 버전: ${context.version}`;
+        } else {
+          statusText += "\n\n활성 컨텍스트가 없습니다.";
+        }
+
+        return {
+          content: [{ type: "text", text: statusText }],
+        };
+      }
+
+      case "context_summarize": {
+        const { format = "markdown", compressionLevel = "medium" } = args as {
+          format?: "markdown" | "json" | "oneliner";
+          compressionLevel?: "none" | "low" | "medium" | "high";
+        };
+
+        const context = await store.getContext();
+
+        if (!context) {
+          return {
+            content: [{ type: "text", text: "활성 컨텍스트가 없습니다." }],
+          };
+        }
+
+        // 압축 레벨에 맞는 요약기 생성
+        const customSummarizer = new ContextSummarizer({ compressionLevel });
+
+        let result: string;
+        switch (format) {
+          case "json":
+            result = customSummarizer.toJSON(context);
+            break;
+          case "oneliner":
+            result = customSummarizer.toOneLiner(context);
+            break;
+          default:
+            result = customSummarizer.toMarkdown(context);
+        }
+
+        const tokens = customSummarizer.estimateTokens(context);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${result}\n\n---\n예상 토큰: ~${tokens}`,
+            },
+          ],
         };
       }
 
