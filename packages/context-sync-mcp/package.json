@@ -1,6 +1,6 @@
 {
   "name": "@liruns/context-sync-mcp",
-  "version": "0.2.0",
+  "version": "2.0.0",
   "description": "AI 에이전트 간 컨텍스트 자동 동기화 MCP 서버 / Automatic context sync MCP server for AI agents",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -52,6 +52,9 @@
     "@modelcontextprotocol/sdk": "^1.0.0",
     "chokidar": "^3.5.3",
     "zod": "^3.22.4"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^11.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

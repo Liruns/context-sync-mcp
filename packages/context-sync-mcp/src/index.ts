@@ -20,6 +20,16 @@ import { MetricsCollector } from "./metrics/index.js";
 import { ContextSearchEngine } from "./search/index.js";
 import type { AgentType, WorkStatus, SharedContext } from "./types/index.js";
 
+// v2.0: 토큰 효율적인 새 도구들
+import {
+  searchContexts,
+  validateSearchInput,
+  getContext,
+  validateGetInput,
+  getContextWarnings,
+  validateWarnInput,
+} from "./tools/index.js";
+
 // 현재 작업 디렉토리
 const PROJECT_PATH = process.cwd();
 
@@ -38,7 +48,7 @@ const searchEngine = new ContextSearchEngine();
 const server = new Server(
   {
     name: "context-sync-mcp",
-    version: "0.2.0",
+    version: "2.0.0",
   },
   {
     capabilities: {
@@ -438,6 +448,89 @@ const TOOLS: Tool[] = [
           default: "markdown",
         },
       },
+    },
+  },
+  // v2.0: 토큰 효율적인 새 도구들
+  {
+    name: "context_search_v2",
+    description: `세션 검색 (힌트 기반, ~200 토큰). 전체 내용이 아닌 힌트만 반환하여 토큰을 절약합니다.
+상세 정보가 필요하면 context_get으로 조회하세요.`,
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string",
+          description: "검색어 (goal, summary, tags에서 검색)",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "태그 필터",
+        },
+        status: {
+          type: "string",
+          enum: ["planning", "coding", "testing", "reviewing", "debugging", "completed", "paused"],
+          description: "상태 필터",
+        },
+        limit: {
+          type: "number",
+          description: "최대 결과 수 (기본: 5, 최대: 20)",
+          default: 5,
+        },
+        offset: {
+          type: "number",
+          description: "시작 위치 (페이지네이션)",
+          default: 0,
+        },
+      },
+    },
+  },
+  {
+    name: "context_get",
+    description: `컨텍스트 상세 조회 (~500 토큰). context_search_v2에서 찾은 ID로 상세 정보를 조회합니다.`,
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: {
+          type: "string",
+          description: "컨텍스트 ID",
+        },
+        includeActions: {
+          type: "boolean",
+          description: "액션 로그 포함 여부 (기본: true)",
+          default: true,
+        },
+        includeChain: {
+          type: "boolean",
+          description: "세션 체인 포함 여부 (기본: false)",
+          default: false,
+        },
+        actionsLimit: {
+          type: "number",
+          description: "액션 로그 최대 개수 (기본: 10, 최대: 50)",
+          default: 10,
+        },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "context_warn",
+    description: `세션 시작 시 경고/추천 조회 (~100 토큰). 현재 작업과 관련된 실패 기록이나 블로커를 경고합니다.`,
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        currentGoal: {
+          type: "string",
+          description: "현재 작업 목표 (관련 세션 검색용)",
+        },
+        limit: {
+          type: "number",
+          description: "최대 경고 수 (기본: 3, 최대: 5)",
+          default: 3,
+        },
+      },
+      required: ["currentGoal"],
     },
   },
 ];
@@ -1118,6 +1211,179 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [{ type: "text", text: metricsCollector.toMarkdown(report) }],
         };
+      }
+
+      // v2.0: 토큰 효율적인 새 도구 핸들러
+      case "context_search_v2": {
+        const db = store.getDatabase();
+        if (!db) {
+          return {
+            content: [{ type: "text", text: "DB가 활성화되지 않았습니다. SQLite를 확인하세요." }],
+            isError: true,
+          };
+        }
+
+        try {
+          const input = validateSearchInput(args);
+          const result = searchContexts(db, input);
+
+          // 힌트 형식으로 출력
+          let text = `🔍 검색 결과 (${result.total}건 중 ${result.hints.length}건)\n\n`;
+
+          if (result.hints.length === 0) {
+            text += "검색 결과가 없습니다.";
+          } else {
+            for (const hint of result.hints) {
+              const warning = hint.hasWarnings ? " ⚠️" : "";
+              text += `- [${hint.id.slice(0, 8)}] ${hint.goal} (${hint.date})${warning}\n`;
+            }
+          }
+
+          if (result.hasMore) {
+            text += `\n💡 더 많은 결과가 있습니다. offset 파라미터를 사용하세요.`;
+          }
+
+          if (result.suggestion) {
+            text += `\n📎 추천: ${result.suggestion}`;
+          }
+
+          return {
+            content: [{ type: "text", text }],
+          };
+        } catch (err) {
+          return {
+            content: [{ type: "text", text: `검색 오류: ${err instanceof Error ? err.message : err}` }],
+            isError: true,
+          };
+        }
+      }
+
+      case "context_get": {
+        const db = store.getDatabase();
+        if (!db) {
+          return {
+            content: [{ type: "text", text: "DB가 활성화되지 않았습니다. SQLite를 확인하세요." }],
+            isError: true,
+          };
+        }
+
+        try {
+          const input = validateGetInput(args);
+          const result = getContext(db, input);
+
+          if (!result) {
+            return {
+              content: [{ type: "text", text: `컨텍스트를 찾을 수 없습니다: ${input.id}` }],
+            };
+          }
+
+          // 상세 정보 출력
+          const ctx = result.context;
+          let text = `📋 컨텍스트 상세\n\n`;
+          text += `**ID:** ${ctx.id}\n`;
+          text += `**목표:** ${ctx.goal}\n`;
+          text += `**상태:** ${ctx.status}\n`;
+          if (ctx.summary) text += `**요약:** ${ctx.summary}\n`;
+          if (ctx.tags && ctx.tags.length > 0) text += `**태그:** ${ctx.tags.join(", ")}\n`;
+          text += `**시작:** ${ctx.startedAt}\n`;
+          if (ctx.endedAt) text += `**종료:** ${ctx.endedAt}\n`;
+
+          // 메타데이터
+          const meta = ctx.metadata;
+          if (meta.decisions && meta.decisions.length > 0) {
+            text += `\n### 결정사항 (${meta.decisions.length}개)\n`;
+            for (const d of meta.decisions.slice(0, 5)) {
+              text += `- ${d.what}: ${d.why}\n`;
+            }
+            if (meta.decisions.length > 5) text += `  ... 외 ${meta.decisions.length - 5}개\n`;
+          }
+
+          if (meta.blockers && meta.blockers.length > 0) {
+            const unresolved = meta.blockers.filter((b) => !b.resolved);
+            if (unresolved.length > 0) {
+              text += `\n### ⚠️ 미해결 블로커 (${unresolved.length}개)\n`;
+              for (const b of unresolved) {
+                text += `- ${b.description}\n`;
+              }
+            }
+          }
+
+          // 액션 로그
+          if (result.actions && result.actions.length > 0) {
+            text += `\n### 최근 액션 (${result.actions.length}개)\n`;
+            for (const a of result.actions.slice(0, 5)) {
+              text += `- [${a.type}] ${a.content.slice(0, 50)}${a.content.length > 50 ? "..." : ""}\n`;
+            }
+            if (result.actions.length > 5) text += `  ... 외 ${result.actions.length - 5}개\n`;
+          }
+
+          // 세션 체인
+          if (result.chain && result.chain.length > 0) {
+            text += `\n### 세션 체인\n`;
+            for (const c of result.chain) {
+              const isCurrent = c.id === ctx.id ? " 👈" : "";
+              text += `- [${c.id.slice(0, 8)}] ${c.goal}${isCurrent}\n`;
+            }
+          }
+
+          return {
+            content: [{ type: "text", text }],
+          };
+        } catch (err) {
+          return {
+            content: [{ type: "text", text: `조회 오류: ${err instanceof Error ? err.message : err}` }],
+            isError: true,
+          };
+        }
+      }
+
+      case "context_warn": {
+        const db = store.getDatabase();
+        if (!db) {
+          return {
+            content: [{ type: "text", text: "DB가 활성화되지 않았습니다. SQLite를 확인하세요." }],
+            isError: true,
+          };
+        }
+
+        try {
+          const input = validateWarnInput(args);
+          const result = getContextWarnings(db, input);
+
+          let text = `⚡ 세션 시작 알림\n\n`;
+
+          if (result.warnings.length > 0) {
+            text += `### ⚠️ 경고 (${result.warnings.length}건)\n`;
+            for (const w of result.warnings) {
+              text += `- ${w.message}\n`;
+            }
+            text += `\n`;
+          }
+
+          if (result.recommendations.length > 0) {
+            text += `### 📚 관련 세션\n`;
+            for (const r of result.recommendations) {
+              text += `- [${r.id.slice(0, 8)}] ${r.goal}\n`;
+            }
+          }
+
+          if (result.warnings.length === 0 && result.recommendations.length === 0) {
+            text += `관련 기록이 없습니다. 새로운 작업을 시작하세요!`;
+          }
+
+          if (result.hasMore) {
+            text += `\n\n💡 더 많은 관련 세션이 있습니다. context_search_v2로 검색하세요.`;
+          }
+
+          return {
+            content: [{ type: "text", text }],
+          };
+        } catch (err) {
+          return {
+            content: [{ type: "text", text: `경고 조회 오류: ${err instanceof Error ? err.message : err}` }],
+            isError: true,
+          };
+        }
       }
 
       default:

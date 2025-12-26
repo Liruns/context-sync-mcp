@@ -238,3 +238,218 @@ export interface UpdateContextInput {
   activeFiles?: string[];
   nextSteps?: string[];
 }
+
+// ========================================
+// v2.0 - 토큰 효율적인 새 타입들
+// ========================================
+
+/**
+ * 컨텍스트 힌트 (검색 결과용, 토큰 효율적)
+ */
+export interface ContextHint {
+  /** 컨텍스트 ID */
+  id: string;
+  /** 목표 (50자 이내) */
+  goal: string;
+  /** 날짜 (YYYY-MM-DD) */
+  date: string;
+  /** 경고 여부 (실패/블로커 존재) */
+  hasWarnings: boolean;
+}
+
+/**
+ * context_search 입력
+ */
+export interface ContextSearchInput {
+  /** 자연어 검색 쿼리 (FTS5) */
+  query?: string;
+  /** 태그 필터 */
+  tags?: string[];
+  /** 상태 필터 */
+  status?: WorkStatus;
+  /** 에이전트 필터 */
+  agent?: AgentType;
+  /** 날짜 범위 */
+  dateRange?: {
+    from?: string;
+    to?: string;
+  };
+  /** 결과 개수 (기본 5, 최대 20) */
+  limit?: number;
+  /** 페이지네이션 오프셋 */
+  offset?: number;
+}
+
+/**
+ * context_search 출력 (~200 토큰)
+ */
+export interface ContextSearchOutput {
+  /** 힌트 목록 */
+  hints: ContextHint[];
+  /** 전체 결과 수 */
+  total: number;
+  /** 더 많은 결과 있음 */
+  hasMore: boolean;
+  /** 제안 메시지 (선택적) */
+  suggestion?: string;
+}
+
+/**
+ * context_get 입력
+ */
+export interface ContextGetInput {
+  /** 컨텍스트 ID */
+  id: string;
+  /** 액션 로그 포함 여부 (기본 true) */
+  includeActions?: boolean;
+  /** 연결된 세션 체인 포함 여부 */
+  includeChain?: boolean;
+  /** 액션 개수 제한 (기본 10) */
+  actionsLimit?: number;
+}
+
+/**
+ * context_get 출력 (~500 토큰)
+ */
+export interface ContextGetOutput {
+  /** 컨텍스트 상세 */
+  context: {
+    id: string;
+    parentId?: string;
+    goal: string;
+    summary?: string;
+    status: WorkStatus;
+    tags: string[];
+    agent?: AgentType;
+    metadata: ContextMetadata;
+    startedAt: string;
+    endedAt?: string;
+    createdAt: string;
+  };
+  /** 액션 로그 */
+  actions?: ActionRecord[];
+  /** 연결된 세션 체인 */
+  chain?: Array<{
+    id: string;
+    goal: string;
+    createdAt: string;
+  }>;
+}
+
+/**
+ * context_warn 입력
+ */
+export interface ContextWarnInput {
+  /** 현재 작업 목표 */
+  currentGoal: string;
+  /** 추천 개수 (기본 3) */
+  limit?: number;
+}
+
+/**
+ * context_warn 출력 (~100 토큰)
+ */
+export interface ContextWarnOutput {
+  /** 경고 목록 */
+  warnings: Array<{
+    contextId: string;
+    message: string;
+  }>;
+  /** 추천 세션 목록 */
+  recommendations: Array<{
+    id: string;
+    goal: string;
+  }>;
+  /** 더 많은 관련 세션 있음 */
+  hasMore: boolean;
+}
+
+/**
+ * 컨텍스트 메타데이터 (DB 저장용)
+ */
+export interface ContextMetadata {
+  decisions: Array<{
+    what: string;
+    why: string;
+    madeBy: string;
+    timestamp: string;
+  }>;
+  approaches: Array<{
+    description: string;
+    result: string;
+    reason?: string;
+    timestamp: string;
+  }>;
+  blockers: Array<{
+    description: string;
+    resolved: boolean;
+    resolution?: string;
+    discoveredAt: string;
+    resolvedAt?: string;
+  }>;
+  codeChanges?: {
+    modifiedFiles: string[];
+    summary: string;
+  };
+  nextSteps?: string[];
+}
+
+/**
+ * 액션 기록 (명령어, 편집, 에러)
+ */
+export interface ActionRecord {
+  id: string;
+  contextId: string;
+  type: "command" | "edit" | "error";
+  content: string;
+  result?: string;
+  filePath?: string;
+  createdAt: string;
+}
+
+/**
+ * DB 컨텍스트 레코드
+ */
+export interface ContextDbRecord {
+  id: string;
+  parent_id: string | null;
+  goal: string;
+  goal_short: string | null;
+  summary: string | null;
+  summary_short: string | null;
+  status: string;
+  tags: string;
+  agent: string | null;
+  metadata: string;
+  has_warnings: number;
+  project_path: string | null;
+  started_at: string;
+  ended_at: string | null;
+  created_at: string;
+  updated_at: string;
+  version: number;
+}
+
+/**
+ * context_save 입력 (v2.0 확장)
+ */
+export interface ContextSaveInput {
+  /** 작업 목표 (필수) */
+  goal: string;
+  /** 요약 */
+  summary?: string;
+  /** 상태 */
+  status?: WorkStatus;
+  /** 태그 */
+  tags?: string[];
+  /** 부모 세션 ID (연결용) */
+  parentId?: string;
+  /** 에이전트 */
+  agent?: AgentType;
+  /** 메타데이터 */
+  decisions?: Array<{ what: string; why: string }>;
+  approaches?: Array<{ description: string; result: string; reason?: string }>;
+  blockers?: Array<{ description: string; resolved?: boolean; resolution?: string }>;
+  codeChanges?: { modifiedFiles: string[]; summary: string };
+  nextSteps?: string[];
+}

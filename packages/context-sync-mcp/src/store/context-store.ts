@@ -1,5 +1,6 @@
 /**
  * Context Store - 컨텍스트 저장소 인터페이스 및 구현
+ * v2.0: SQLite 하이브리드 저장소
  */
 
 import * as fs from "fs/promises";
@@ -16,7 +17,23 @@ import type {
   AgentHandoff,
   AgentType,
   ContextSyncConfig,
+  // v2.0 타입들
+  ContextSearchInput,
+  ContextSearchOutput,
+  ContextGetInput,
+  ContextGetOutput,
+  ContextWarnInput,
+  ContextWarnOutput,
+  ContextSaveInput,
 } from "../types/index.js";
+
+// v2.0 imports
+import { initDatabase, closeDatabase, type DatabaseInstance } from "../db/index.js";
+import { migrateFromJSON, needsMigration } from "../db/migrate.js";
+import { generateGoalShort, generateSummaryShort, hasWarnings } from "../utils/truncate.js";
+import { searchContexts as dbSearchContexts } from "../tools/context-search.js";
+import { getContext as dbGetContext } from "../tools/context-get.js";
+import { getContextWarnings as dbGetWarnings } from "../tools/context-warn.js";
 
 /** 기본 설정 */
 const DEFAULT_CONFIG: ContextSyncConfig = {
@@ -136,11 +153,14 @@ function validateConfig(config: Partial<ContextSyncConfig>): ConfigValidationRes
 
 /**
  * 컨텍스트 저장소 클래스
+ * v2.0: SQLite 하이브리드 저장소
  */
 export class ContextStore {
   private config: ContextSyncConfig;
   private storePath: string;
   private currentContext: SharedContext | null = null;
+  private db: DatabaseInstance | null = null;  // v2.0 SQLite
+  private dbEnabled: boolean = false;  // DB 활성화 여부
 
   constructor(projectPath: string, config?: Partial<ContextSyncConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -148,7 +168,22 @@ export class ContextStore {
   }
 
   /**
+   * DB 인스턴스 가져오기 (v2.0)
+   */
+  getDatabase(): DatabaseInstance | null {
+    return this.db;
+  }
+
+  /**
+   * DB 활성화 여부 (v2.0)
+   */
+  isDbEnabled(): boolean {
+    return this.dbEnabled && this.db !== null;
+  }
+
+  /**
    * 저장소 초기화
+   * v2.0: SQLite DB 초기화 및 마이그레이션 포함
    */
   async initialize(): Promise<void> {
     await fs.mkdir(this.storePath, { recursive: true });
@@ -166,6 +201,40 @@ export class ContextStore {
 
     // 기존 컨텍스트 로드 시도
     await this.loadCurrentContext();
+
+    // v2.0: SQLite DB 초기화
+    try {
+      this.db = initDatabase(this.storePath);
+
+      if (this.db) {
+        this.dbEnabled = true;
+
+        // 자동 마이그레이션
+        if (needsMigration(this.db, this.storePath)) {
+          const result = migrateFromJSON(this.db, this.storePath);
+          if (!result.success) {
+            console.warn("마이그레이션 경고:", result.errors);
+          }
+        }
+      } else {
+        this.dbEnabled = false;
+        console.warn("SQLite 사용 불가, JSON 폴백 모드로 동작합니다.");
+      }
+    } catch (err) {
+      console.warn("SQLite 초기화 실패, JSON 폴백 사용:", err);
+      this.dbEnabled = false;
+    }
+  }
+
+  /**
+   * 저장소 종료 (v2.0)
+   */
+  async close(): Promise<void> {
+    if (this.db) {
+      closeDatabase(this.db);
+      this.db = null;
+      this.dbEnabled = false;
+    }
   }
 
   /**
@@ -722,6 +791,163 @@ ${ctx.codeChanges.modifiedFiles.join(", ") || "없음"}
       if (!(field in obj) || obj[field] === undefined) {
         throw new Error(`필수 필드 누락: ${field}`);
       }
+    }
+  }
+
+  // ========================================
+  // v2.0 - 토큰 효율적인 새 메서드들
+  // ========================================
+
+  /**
+   * 컨텍스트 저장 (v2.0 확장)
+   * DB와 JSON 모두에 저장
+   */
+  async saveContext(input: ContextSaveInput): Promise<{ id: string; message: string }> {
+    const now = new Date();
+    const id = randomUUID();
+
+    // 짧은 버전 생성
+    const goalShort = generateGoalShort(input.goal);
+    const summaryShort = generateSummaryShort(input.summary);
+    const hasWarningsFlag = hasWarnings({
+      approaches: input.approaches?.map(a => ({ result: a.result })),
+      blockers: input.blockers?.map(b => ({ resolved: b.resolved ?? false })),
+    });
+
+    // 메타데이터 구성
+    const metadata = {
+      decisions: (input.decisions || []).map(d => ({
+        what: d.what,
+        why: d.why,
+        madeBy: input.agent || 'unknown',
+        timestamp: now.toISOString(),
+      })),
+      approaches: (input.approaches || []).map(a => ({
+        description: a.description,
+        result: a.result,
+        reason: a.reason,
+        timestamp: now.toISOString(),
+      })),
+      blockers: (input.blockers || []).map(b => ({
+        description: b.description,
+        resolved: b.resolved ?? false,
+        resolution: b.resolution,
+        discoveredAt: now.toISOString(),
+        resolvedAt: b.resolved ? now.toISOString() : undefined,
+      })),
+      codeChanges: input.codeChanges,
+      nextSteps: input.nextSteps || [],
+    };
+
+    // DB에 저장
+    if (this.db && this.dbEnabled) {
+      try {
+        this.db.prepare(`
+          INSERT INTO contexts (
+            id, parent_id, goal, goal_short, summary, summary_short,
+            status, tags, agent, metadata, has_warnings, project_path,
+            started_at, created_at, updated_at, version
+          ) VALUES (
+            ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?
+          )
+        `).run(
+          id,
+          input.parentId || null,
+          input.goal,
+          goalShort,
+          input.summary || null,
+          summaryShort,
+          input.status || 'planning',
+          JSON.stringify(input.tags || []),
+          input.agent || null,
+          JSON.stringify(metadata),
+          hasWarningsFlag ? 1 : 0,
+          this.storePath,
+          now.toISOString(),
+          now.toISOString(),
+          now.toISOString(),
+          1
+        );
+      } catch (err) {
+        console.error('DB 저장 실패:', err);
+      }
+    }
+
+    // 기존 방식으로도 저장 (하위 호환성)
+    await this.createContext({
+      projectPath: this.storePath,
+      goal: input.goal,
+      agent: input.agent,
+    });
+
+    return {
+      id,
+      message: `컨텍스트 저장 완료: ${goalShort}`,
+    };
+  }
+
+  /**
+   * 컨텍스트 검색 (v2.0 힌트 기반)
+   * ~200 토큰 응답
+   */
+  searchContexts(input: ContextSearchInput): ContextSearchOutput {
+    if (!this.db || !this.dbEnabled) {
+      return { hints: [], total: 0, hasMore: false };
+    }
+    return dbSearchContexts(this.db, input);
+  }
+
+  /**
+   * 컨텍스트 상세 조회 (v2.0)
+   * ~500 토큰 응답
+   */
+  getContextById(input: ContextGetInput): ContextGetOutput | null {
+    if (!this.db || !this.dbEnabled) {
+      return null;
+    }
+    return dbGetContext(this.db, input);
+  }
+
+  /**
+   * 경고/추천 조회 (v2.0)
+   * ~100 토큰 응답
+   */
+  getWarnings(input: ContextWarnInput): ContextWarnOutput {
+    if (!this.db || !this.dbEnabled) {
+      return { warnings: [], recommendations: [], hasMore: false };
+    }
+    return dbGetWarnings(this.db, input);
+  }
+
+  /**
+   * 액션 로그 추가 (v2.0)
+   */
+  async addAction(
+    contextId: string,
+    type: 'command' | 'edit' | 'error',
+    content: string,
+    result?: string,
+    filePath?: string
+  ): Promise<void> {
+    if (!this.db || !this.dbEnabled) return;
+
+    try {
+      this.db.prepare(`
+        INSERT INTO actions (id, context_id, type, content, result, file_path, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        randomUUID(),
+        contextId,
+        type,
+        content,
+        result || null,
+        filePath || null,
+        new Date().toISOString()
+      );
+    } catch (err) {
+      console.error('액션 로그 저장 실패:', err);
     }
   }
 }
