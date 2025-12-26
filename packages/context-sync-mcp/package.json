@@ -1,7 +1,7 @@
 {
-  "name": "@anthropic/context-sync-mcp",
+  "name": "@liruns/context-sync-mcp",
   "version": "0.1.0",
-  "description": "AI 에이전트 간 컨텍스트 자동 동기화 MCP 서버",
+  "description": "AI 에이전트 간 컨텍스트 자동 동기화 MCP 서버 / Automatic context sync MCP server for AI agents",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
@@ -13,7 +13,8 @@
     "start": "node dist/index.js",
     "test": "vitest",
     "lint": "eslint src/",
-    "clean": "rimraf dist"
+    "clean": "rimraf dist",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "mcp",
@@ -22,10 +23,31 @@
     "context-sync",
     "claude",
     "cursor",
-    "windsurf"
+    "windsurf",
+    "claude-code",
+    "ai-agent",
+    "context-sharing"
   ],
   "author": "Liruns",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Liruns/context-sync-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Liruns/context-sync-mcp/issues"
+  },
+  "homepage": "https://github.com/Liruns/context-sync-mcp#readme",
+  "files": [
+    "dist",
+    "README.md",
+    "README.ko.md",
+    "README.en.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "chokidar": "^3.5.3",

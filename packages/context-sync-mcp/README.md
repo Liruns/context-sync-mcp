@@ -25,7 +25,7 @@ Cursor, Claude Code, Windsurf 등 여러 AI 코딩 도구에서 작업 컨텍스
 ### 설치
 
 ```bash
-npm install @anthropic/context-sync-mcp
+npm install @liruns/context-sync-mcp
 ```
 
 ### 소스에서 빌드
@@ -46,7 +46,7 @@ npm run build
   "mcpServers": {
     "context-sync": {
       "command": "npx",
-      "args": ["@anthropic/context-sync-mcp"]
+      "args": ["@liruns/context-sync-mcp"]
     }
   }
 }

@@ -33,7 +33,7 @@ Context Sync MCP is an MCP (Model Context Protocol) server that enables seamless
 ### npm Install (Recommended)
 
 ```bash
-npm install @anthropic/context-sync-mcp
+npm install @liruns/context-sync-mcp
 ```
 
 ### Build from Source
@@ -56,7 +56,7 @@ Add to `.claude/mcp.json`:
   "mcpServers": {
     "context-sync": {
       "command": "npx",
-      "args": ["@anthropic/context-sync-mcp"]
+      "args": ["@liruns/context-sync-mcp"]
     }
   }
 }
@@ -71,7 +71,7 @@ Add to `.cursor/mcp.json`:
   "mcpServers": {
     "context-sync": {
       "command": "npx",
-      "args": ["@anthropic/context-sync-mcp"]
+      "args": ["@liruns/context-sync-mcp"]
     }
   }
 }
@@ -86,7 +86,7 @@ Add MCP server in Windsurf settings:
   "mcpServers": {
     "context-sync": {
       "command": "npx",
-      "args": ["@anthropic/context-sync-mcp"]
+      "args": ["@liruns/context-sync-mcp"]
     }
   }
 }
