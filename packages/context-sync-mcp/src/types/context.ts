@@ -177,6 +177,18 @@ export interface ContextSnapshot {
 }
 
 /**
+ * 자동화 설정
+ */
+export interface AutomationConfig {
+  /** 세션 시작 시 자동 로드 */
+  autoLoad: boolean;
+  /** 변경 시 자동 저장 */
+  autoSave: boolean;
+  /** 세션 시작 시 자동 동기화 시작 */
+  autoSync: boolean;
+}
+
+/**
  * MCP 설정
  */
 export interface ContextSyncConfig {
@@ -204,6 +216,8 @@ export interface ContextSyncConfig {
     excludePatterns: string[];
     localOnly: boolean;
   };
+  /** 자동화 설정 */
+  automation: AutomationConfig;
 }
 
 /**

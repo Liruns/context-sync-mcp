@@ -290,6 +290,70 @@ const TOOLS: Tool[] = [
       },
     },
   },
+  // 자연어 별칭 도구
+  {
+    name: "ctx",
+    description: `자연어로 컨텍스트를 관리합니다. 자연스러운 한국어/영어 명령을 지원합니다.
+
+예시:
+- "저장" / "save" / "저장해줘" → 컨텍스트 저장
+- "로드" / "load" / "불러와" / "이전 작업" → 컨텍스트 로드
+- "상태" / "status" / "어디까지 했어" → 현재 상태 조회
+- "요약" / "summary" / "정리해줘" → 컨텍스트 요약
+- "자동저장 켜줘" / "auto on" → 자동 동기화 시작
+- "자동저장 꺼줘" / "auto off" → 자동 동기화 중지`,
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        command: {
+          type: "string",
+          description: "자연어 명령 (예: '저장해줘', 'load', '어디까지 했더라')",
+        },
+        goal: {
+          type: "string",
+          description: "저장 시 작업 목표 (선택사항)",
+        },
+      },
+      required: ["command"],
+    },
+  },
+  // 자동화 설정 도구
+  {
+    name: "automation_config",
+    description: "자동 저장/로드 설정을 관리합니다. 세션 시작 시 자동 로드, 변경 시 자동 저장 등을 설정할 수 있습니다.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        autoLoad: {
+          type: "boolean",
+          description: "세션 시작 시 자동으로 이전 컨텍스트 로드 (기본: true)",
+        },
+        autoSave: {
+          type: "boolean",
+          description: "변경 시 자동 저장 (기본: true)",
+        },
+        autoSync: {
+          type: "boolean",
+          description: "세션 시작 시 자동 동기화 시작 (기본: false)",
+        },
+      },
+    },
+  },
+  // 세션 시작 도구 (자동 로드 지원)
+  {
+    name: "session_start",
+    description: "새 세션을 시작합니다. autoLoad가 활성화되어 있으면 이전 컨텍스트를 자동으로 로드하고 요약을 반환합니다.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        agent: {
+          type: "string",
+          enum: ["claude-code", "cursor", "windsurf", "copilot"],
+          description: "현재 AI 에이전트",
+        },
+      },
+    },
+  },
 ];
 
 // 도구 목록 핸들러
@@ -629,6 +693,173 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               text: `${result}\n\n---\n예상 토큰: ~${tokens}`,
             },
           ],
+        };
+      }
+
+      // 자연어 별칭 도구 핸들러
+      case "ctx": {
+        const { command, goal } = args as { command: string; goal?: string };
+        const cmd = command.toLowerCase().trim();
+
+        // 저장 명령 패턴
+        if (/^(save|저장|저장해|저장해줘|저장하기|세이브)/.test(cmd)) {
+          let context = await store.getContext();
+          if (!context && goal) {
+            context = await store.createContext({
+              projectPath: PROJECT_PATH,
+              goal,
+              agent: "claude-code",
+            });
+          } else if (context) {
+            await store.updateContext({ goal: goal || context.currentWork.goal });
+          } else {
+            return {
+              content: [{ type: "text", text: "저장할 목표(goal)를 지정해주세요." }],
+            };
+          }
+          return {
+            content: [{ type: "text", text: `✅ 컨텍스트가 저장되었습니다.\n\n목표: ${goal || context?.currentWork.goal}` }],
+          };
+        }
+
+        // 로드 명령 패턴
+        if (/^(load|로드|불러|불러와|이전|어디까지|계속|resume|continue)/.test(cmd)) {
+          const context = await store.getContext();
+          if (!context) {
+            return {
+              content: [{ type: "text", text: "📭 저장된 컨텍스트가 없습니다." }],
+            };
+          }
+          const summary = await store.getSummary();
+          return {
+            content: [{ type: "text", text: `📥 이전 작업을 불러왔습니다.\n\n${summary}` }],
+          };
+        }
+
+        // 상태 조회 패턴
+        if (/^(status|상태|현재|지금|뭐|state)/.test(cmd)) {
+          const context = await store.getContext();
+          const isActive = syncEngine.isActive();
+          if (!context) {
+            return {
+              content: [{ type: "text", text: `📊 상태: 활성 컨텍스트 없음\n자동 동기화: ${isActive ? "실행 중" : "중지됨"}` }],
+            };
+          }
+          return {
+            content: [{
+              type: "text",
+              text: `📊 현재 상태\n\n목표: ${context.currentWork.goal}\n상태: ${context.currentWork.status}\n버전: ${context.version}\n자동 동기화: ${isActive ? "실행 중" : "중지됨"}`
+            }],
+          };
+        }
+
+        // 요약 패턴
+        if (/^(summary|요약|정리|summarize)/.test(cmd)) {
+          const context = await store.getContext();
+          if (!context) {
+            return {
+              content: [{ type: "text", text: "📭 요약할 컨텍스트가 없습니다." }],
+            };
+          }
+          const summary = await store.getSummary();
+          return {
+            content: [{ type: "text", text: summary }],
+          };
+        }
+
+        // 자동 동기화 켜기
+        if (/^(auto\s*(on|켜|시작|start)|자동.*켜|자동.*시작)/.test(cmd)) {
+          if (syncEngine.isActive()) {
+            return {
+              content: [{ type: "text", text: "🔄 자동 동기화가 이미 실행 중입니다." }],
+            };
+          }
+          await syncEngine.start();
+          return {
+            content: [{ type: "text", text: "✅ 자동 동기화가 시작되었습니다." }],
+          };
+        }
+
+        // 자동 동기화 끄기
+        if (/^(auto\s*(off|꺼|중지|stop)|자동.*꺼|자동.*중지)/.test(cmd)) {
+          if (!syncEngine.isActive()) {
+            return {
+              content: [{ type: "text", text: "⏹️ 자동 동기화가 이미 중지되어 있습니다." }],
+            };
+          }
+          syncEngine.stop();
+          return {
+            content: [{ type: "text", text: "⏹️ 자동 동기화가 중지되었습니다." }],
+          };
+        }
+
+        return {
+          content: [{
+            type: "text",
+            text: `❓ 알 수 없는 명령: "${command}"\n\n사용 가능한 명령:\n- 저장/save: 컨텍스트 저장\n- 로드/load: 이전 작업 불러오기\n- 상태/status: 현재 상태 조회\n- 요약/summary: 컨텍스트 요약\n- auto on/off: 자동 동기화 켜기/끄기`
+          }],
+        };
+      }
+
+      // 자동화 설정 핸들러
+      case "automation_config": {
+        const { autoLoad, autoSave, autoSync } = args as {
+          autoLoad?: boolean;
+          autoSave?: boolean;
+          autoSync?: boolean;
+        };
+
+        const config = store.getConfig();
+        const updates: { automation?: typeof config.automation } = {};
+
+        if (autoLoad !== undefined || autoSave !== undefined || autoSync !== undefined) {
+          updates.automation = {
+            ...config.automation,
+            ...(autoLoad !== undefined && { autoLoad }),
+            ...(autoSave !== undefined && { autoSave }),
+            ...(autoSync !== undefined && { autoSync }),
+          };
+          await store.updateConfig(updates as Partial<typeof config>);
+        }
+
+        const newConfig = store.getConfig();
+        return {
+          content: [{
+            type: "text",
+            text: `⚙️ 자동화 설정\n\n- autoLoad (세션 시작 시 자동 로드): ${newConfig.automation.autoLoad ? "✅ 켜짐" : "❌ 꺼짐"}\n- autoSave (변경 시 자동 저장): ${newConfig.automation.autoSave ? "✅ 켜짐" : "❌ 꺼짐"}\n- autoSync (자동 동기화 시작): ${newConfig.automation.autoSync ? "✅ 켜짐" : "❌ 꺼짐"}`,
+          }],
+        };
+      }
+
+      // 세션 시작 핸들러
+      case "session_start": {
+        const { agent = "claude-code" } = args as { agent?: AgentType };
+        const config = store.getConfig();
+
+        let result = `🚀 세션 시작 (${agent})\n\n`;
+
+        // 자동 로드
+        if (config.automation.autoLoad) {
+          const context = await store.getContext();
+          if (context) {
+            await store.recordHandoff(context.agentChain.at(-1)?.to || "unknown", agent, "세션 시작");
+            const summary = await store.getSummary();
+            result += `📥 이전 작업을 자동으로 불러왔습니다.\n\n${summary}`;
+          } else {
+            result += "📭 이전 작업 기록이 없습니다. 새 세션입니다.";
+          }
+        } else {
+          result += "⚙️ autoLoad가 비활성화되어 있습니다.";
+        }
+
+        // 자동 동기화 시작
+        if (config.automation.autoSync && !syncEngine.isActive()) {
+          await syncEngine.start();
+          result += "\n\n🔄 자동 동기화가 시작되었습니다.";
+        }
+
+        return {
+          content: [{ type: "text", text: result }],
         };
       }
 

@@ -43,6 +43,11 @@ const DEFAULT_CONFIG: ContextSyncConfig = {
     excludePatterns: ["*.env", "*secret*", "*password*", "*.pem", "*.key"],
     localOnly: true,
   },
+  automation: {
+    autoLoad: true,
+    autoSave: true,
+    autoSync: false,
+  },
 };
 
 /**
@@ -65,16 +70,35 @@ export class ContextStore {
     await fs.mkdir(this.storePath, { recursive: true });
     await fs.mkdir(path.join(this.storePath, "snapshots"), { recursive: true });
 
-    // 설정 파일 생성 (없으면)
+    // 설정 파일 로드 또는 생성
     const configPath = path.join(this.storePath, "config.json");
     try {
-      await fs.access(configPath);
+      const configData = await fs.readFile(configPath, "utf-8");
+      const savedConfig = JSON.parse(configData);
+      this.config = { ...DEFAULT_CONFIG, ...savedConfig };
     } catch {
       await fs.writeFile(configPath, JSON.stringify(this.config, null, 2));
     }
 
     // 기존 컨텍스트 로드 시도
     await this.loadCurrentContext();
+  }
+
+  /**
+   * 현재 설정 가져오기
+   */
+  getConfig(): ContextSyncConfig {
+    return this.config;
+  }
+
+  /**
+   * 설정 업데이트
+   */
+  async updateConfig(updates: Partial<ContextSyncConfig>): Promise<ContextSyncConfig> {
+    this.config = { ...this.config, ...updates };
+    const configPath = path.join(this.storePath, "config.json");
+    await fs.writeFile(configPath, JSON.stringify(this.config, null, 2));
+    return this.config;
   }
 
   /**
