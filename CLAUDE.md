@@ -1,6 +1,6 @@
 # Claude Code Universal Agent Toolkit
 
-범용 Claude Code 에코시스템 - 모든 개발 프로젝트에서 사용 가능한 에이전트, 스킬, 훅 모음
+범용 Claude Code 에코시스템 - 모든 개발 프로젝트에서 사용 가능한 에이전트, 스킬, 훅, MCP 서버 모음
 
 ## 프로젝트 개요
 
@@ -15,6 +15,45 @@
 | Commands | `.claude/commands/` | 15개 | 슬래시 명령어 |
 | Hooks | `.claude/hooks/` | 9개 | 자동화 스크립트 |
 | Rules | `.claude/rules/` | 4개 | 경로별 규칙 |
+| **MCP Servers** | `packages/` | 1개 | 커스텀 MCP 서버 |
+
+## Context Sync MCP (NEW)
+
+AI 에이전트 간 컨텍스트 자동 동기화 MCP 서버
+
+### 핵심 기능
+- **컨텍스트 공유**: Cursor, Claude Code, Windsurf 간 작업 내용 자동 인수인계
+- **의사결정 기록**: 왜 특정 방식을 선택했는지 기록
+- **실패 기록**: 시도했지만 실패한 접근법 공유 (같은 실수 반복 방지)
+- **스냅샷**: 특정 시점으로 롤백 가능
+
+### 사용 가능한 도구
+
+| 도구 | 설명 |
+|------|------|
+| `context_save` | 현재 작업 컨텍스트 저장 |
+| `context_load` | 이전 작업 컨텍스트 로드 |
+| `decision_log` | 의사결정 기록 |
+| `attempt_log` | 시도/실패 기록 |
+| `handoff` | 다른 AI 에이전트로 인수인계 |
+
+### 사용 예시
+```
+# 작업 시작
+context_save로 "로그인 기능 구현" 목표 저장해줘
+
+# 결정 기록
+decision_log로 "JWT 방식 사용" 결정 기록해줘
+
+# 다른 도구로 인수인계
+handoff로 Windsurf에게 인수인계해줘
+```
+
+### 설치
+```bash
+cd packages/context-sync-mcp
+npm install && npm run build
+```
 
 ## 사용 가능한 에이전트
 
