@@ -154,9 +154,9 @@ CREATE TABLE IF NOT EXISTS schema_version (
 )`;
 
 /**
- * 모든 스키마 생성 쿼리 (순서 중요)
+ * 핵심 스키마 생성 쿼리 (FTS 제외)
  */
-export function getAllSchemaQueries(): string[] {
+export function getCoreSchemaQueries(): string[] {
   return [
     CREATE_SCHEMA_VERSION_TABLE,
     CREATE_CONTEXTS_TABLE,
@@ -164,15 +164,33 @@ export function getAllSchemaQueries(): string[] {
     // v2.2: 새 테이블
     CREATE_CONTEXT_TAGS_TABLE,
     CREATE_CONTEXTS_ARCHIVE_TABLE,
-    // FTS
-    CREATE_FTS_TABLE,
-    CREATE_FTS_INSERT_TRIGGER,
-    CREATE_FTS_UPDATE_TRIGGER,
-    CREATE_FTS_DELETE_TRIGGER,
     // v2.2: 태그 정리 트리거
     CREATE_CONTEXT_TAGS_DELETE_TRIGGER,
     // 인덱스
     ...CREATE_INDEXES,
+  ];
+}
+
+/**
+ * FTS 관련 쿼리 (FTS5 지원 시에만 실행)
+ */
+export function getFtsSchemaQueries(): string[] {
+  return [
+    CREATE_FTS_TABLE,
+    CREATE_FTS_INSERT_TRIGGER,
+    CREATE_FTS_UPDATE_TRIGGER,
+    CREATE_FTS_DELETE_TRIGGER,
+  ];
+}
+
+/**
+ * 모든 스키마 생성 쿼리 (순서 중요)
+ * @deprecated getCoreSchemaQueries + getFtsSchemaQueries 사용 권장
+ */
+export function getAllSchemaQueries(): string[] {
+  return [
+    ...getCoreSchemaQueries(),
+    ...getFtsSchemaQueries(),
   ];
 }
 

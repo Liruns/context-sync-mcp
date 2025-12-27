@@ -11,7 +11,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
-import { getAllSchemaQueries, getV2MigrationQueries, SCHEMA_VERSION } from './schema.js';
+import { getCoreSchemaQueries, getFtsSchemaQueries, getV2MigrationQueries, SCHEMA_VERSION } from './schema.js';
 
 export { SCHEMA_VERSION } from './schema.js';
 
@@ -297,16 +297,37 @@ export function initDatabase(
  * 스키마 초기화 및 마이그레이션
  */
 function initSchema(db: DatabaseInstance): void {
-  const queries = getAllSchemaQueries();
+  const coreQueries = getCoreSchemaQueries();
+  const ftsQueries = getFtsSchemaQueries();
 
   // 트랜잭션으로 스키마 생성
   const initSchemaTransaction = db.transaction(() => {
-    for (const query of queries) {
+    // 1. 핵심 스키마 생성 (필수)
+    for (const query of coreQueries) {
       try {
         db.exec(query);
       } catch (err) {
-        // IF NOT EXISTS로 인해 대부분의 에러는 무시
-        console.warn('[Context Sync] 스키마 쿼리 실행 경고:', err);
+        console.warn('[Context Sync] 핵심 스키마 쿼리 경고:', err);
+      }
+    }
+
+    // 2. FTS 스키마 생성 (선택적 - FTS5 지원 시에만)
+    if (ftsQueries.length > 0) {
+      try {
+        // FTS 테이블 생성 시도 (첫 번째 쿼리)
+        db.exec(ftsQueries[0]);
+
+        // FTS 테이블 성공 시 트리거도 생성
+        for (let i = 1; i < ftsQueries.length; i++) {
+          try {
+            db.exec(ftsQueries[i]);
+          } catch (err) {
+            console.warn('[Context Sync] FTS 트리거 생성 경고:', err);
+          }
+        }
+      } catch (err) {
+        // FTS5 미지원 - 트리거 생성 스킵
+        console.log('[Context Sync] FTS5 미지원, LIKE 검색으로 폴백');
       }
     }
 
