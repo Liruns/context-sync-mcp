@@ -137,14 +137,6 @@ export interface CodeChanges {
 }
 
 /**
- * Vector Clock 타입 (v2.5)
- * 분산 시스템 인과관계 추적용
- */
-export interface VectorClock {
-  [agent: string]: number;
-}
-
-/**
  * 공유 컨텍스트 (메인 데이터 구조)
  */
 export interface SharedContext {
@@ -166,8 +158,6 @@ export interface SharedContext {
   updatedAt: Date;
   /** 버전 */
   version: number;
-  /** Vector Clock (v2.5, 충돌 감지용) */
-  vectorClock?: VectorClock;
 }
 
 /**
