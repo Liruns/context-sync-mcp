@@ -1,15 +1,17 @@
 /**
- * Context Sync MCP v2.0 - Database Module
+ * Context Sync MCP v2.2 - Database Module
  * sql.js (WebAssembly) 기반 SQLite 데이터베이스
  *
  * sql.js는 WebAssembly 기반이므로 네이티브 컴파일이 필요 없습니다.
  * 모든 플랫폼에서 npm install만으로 동작합니다.
+ *
+ * v2.2: 스키마 마이그레이션, 태그 정규화, 아카이빙 지원
  */
 
 import * as path from 'path';
 import * as fs from 'fs';
 import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
-import { getAllSchemaQueries, SCHEMA_VERSION } from './schema.js';
+import { getAllSchemaQueries, getV2MigrationQueries, SCHEMA_VERSION } from './schema.js';
 
 export { SCHEMA_VERSION } from './schema.js';
 
@@ -300,19 +302,94 @@ function initSchema(db: DatabaseInstance): void {
   // 트랜잭션으로 스키마 생성
   const initSchemaTransaction = db.transaction(() => {
     for (const query of queries) {
-      db.exec(query);
+      try {
+        db.exec(query);
+      } catch (err) {
+        // IF NOT EXISTS로 인해 대부분의 에러는 무시
+        console.warn('[Context Sync] 스키마 쿼리 실행 경고:', err);
+      }
     }
 
-    // 스키마 버전 기록
+    // 스키마 버전 확인 및 마이그레이션
     const currentVersion = getSchemaVersion(db);
+
     if (currentVersion === 0) {
+      // 새 DB - 최신 버전으로 설정
       db.prepare(
         'INSERT OR REPLACE INTO schema_version (version) VALUES (?)'
       ).run(SCHEMA_VERSION);
+    } else if (currentVersion < SCHEMA_VERSION) {
+      // 마이그레이션 필요
+      runMigrations(db, currentVersion);
     }
   });
 
   initSchemaTransaction();
+}
+
+/**
+ * v2.2: 스키마 마이그레이션 실행
+ */
+function runMigrations(db: DatabaseInstance, fromVersion: number): void {
+  console.log(`[Context Sync] 마이그레이션 실행: v${fromVersion} → v${SCHEMA_VERSION}`);
+
+  if (fromVersion < 2) {
+    // v1 → v2 마이그레이션
+    const migrationQueries = getV2MigrationQueries();
+    for (const query of migrationQueries) {
+      try {
+        db.exec(query);
+      } catch (err) {
+        console.warn('[Context Sync] 마이그레이션 쿼리 경고:', err);
+      }
+    }
+
+    // 기존 태그 데이터를 context_tags 테이블로 마이그레이션
+    migrateTagsToJunctionTable(db);
+  }
+
+  // 버전 업데이트
+  db.prepare(
+    'INSERT OR REPLACE INTO schema_version (version) VALUES (?)'
+  ).run(SCHEMA_VERSION);
+
+  console.log(`[Context Sync] 마이그레이션 완료: v${SCHEMA_VERSION}`);
+}
+
+/**
+ * v2.2: 기존 JSON 태그를 context_tags 테이블로 마이그레이션
+ */
+function migrateTagsToJunctionTable(db: DatabaseInstance): void {
+  console.log('[Context Sync] 태그 정규화 마이그레이션 시작...');
+
+  try {
+    const contexts = db.prepare('SELECT id, tags FROM contexts').all() as Array<{
+      id: string;
+      tags: string;
+    }>;
+
+    let migratedCount = 0;
+
+    for (const ctx of contexts) {
+      try {
+        const tags = JSON.parse(ctx.tags || '[]') as string[];
+        for (const tag of tags) {
+          if (tag && typeof tag === 'string') {
+            db.prepare(
+              'INSERT OR IGNORE INTO context_tags (context_id, tag) VALUES (?, ?)'
+            ).run(ctx.id, tag.trim());
+            migratedCount++;
+          }
+        }
+      } catch {
+        // JSON 파싱 실패 무시
+      }
+    }
+
+    console.log(`[Context Sync] 태그 마이그레이션 완료: ${migratedCount}개 태그`);
+  } catch (err) {
+    console.error('[Context Sync] 태그 마이그레이션 실패:', err);
+  }
 }
 
 /**
@@ -411,4 +488,64 @@ export function isSqliteAvailable(): boolean {
  */
 export function getSqliteLoadError(): Error | null {
   return initError;
+}
+
+/**
+ * v2.2: 컨텍스트의 태그를 context_tags 테이블에 동기화
+ */
+export function syncContextTags(
+  db: DatabaseInstance,
+  contextId: string,
+  tags: string[]
+): void {
+  // 기존 태그 삭제
+  db.prepare('DELETE FROM context_tags WHERE context_id = ?').run(contextId);
+
+  // 새 태그 삽입
+  for (const tag of tags) {
+    if (tag && typeof tag === 'string') {
+      db.prepare(
+        'INSERT OR IGNORE INTO context_tags (context_id, tag) VALUES (?, ?)'
+      ).run(contextId, tag.trim());
+    }
+  }
+}
+
+/**
+ * v2.2: 컨텍스트의 태그 목록 조회
+ */
+export function getContextTags(db: DatabaseInstance, contextId: string): string[] {
+  const rows = db.prepare(
+    'SELECT tag FROM context_tags WHERE context_id = ? ORDER BY tag'
+  ).all(contextId) as Array<{ tag: string }>;
+
+  return rows.map((r) => r.tag);
+}
+
+/**
+ * v2.2: 배치로 여러 컨텍스트의 액션 조회 (N+1 쿼리 방지)
+ */
+export function getActionsForContextsBatch(
+  db: DatabaseInstance,
+  contextIds: string[]
+): Map<string, unknown[]> {
+  if (contextIds.length === 0) return new Map();
+
+  const placeholders = contextIds.map(() => '?').join(', ');
+  const rows = db.prepare(`
+    SELECT * FROM actions
+    WHERE context_id IN (${placeholders})
+    ORDER BY context_id, created_at ASC
+  `).all(...contextIds) as Array<{ context_id: string; [key: string]: unknown }>;
+
+  const result = new Map<string, unknown[]>();
+  for (const row of rows) {
+    const ctxId = row.context_id;
+    if (!result.has(ctxId)) {
+      result.set(ctxId, []);
+    }
+    result.get(ctxId)!.push(row);
+  }
+
+  return result;
 }

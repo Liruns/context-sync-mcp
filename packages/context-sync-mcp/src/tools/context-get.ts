@@ -1,6 +1,7 @@
 /**
- * Context Sync MCP v2.0 - context_get Tool
+ * Context Sync MCP v2.2 - context_get Tool
  * 컨텍스트 상세 조회
+ * v2.2: 세션 체인 조회를 재귀 CTE로 최적화 (최대 10 쿼리 → 1 쿼리)
  */
 
 import type { DatabaseInstance } from '../db/index.js';
@@ -114,76 +115,58 @@ export function getContext(
 
 /**
  * 세션 체인 조회 (부모 → 현재 → 자식)
+ * v2.2: 재귀 CTE 사용으로 단일 쿼리로 최적화
  */
 function getSessionChain(
   db: DatabaseInstance,
   contextId: string
 ): Array<{ id: string; goal: string; createdAt: string }> {
-  const chain: Array<{ id: string; goal: string; createdAt: string }> = [];
+  // v2.2: 재귀 CTE로 부모 체인 + 현재 + 자식을 단일 쿼리로 조회
+  const chainRows = db.prepare(`
+    WITH RECURSIVE
+    -- 부모 체인 (depth < 0: 부모들)
+    parent_chain(id, goal_short, created_at, depth) AS (
+      -- Base: 현재 컨텍스트
+      SELECT id, goal_short, created_at, 0 as depth
+      FROM contexts
+      WHERE id = ?
 
-  // 부모 체인 조회 (역순)
-  let currentId: string | null = contextId;
-  const parentChain: Array<{ id: string; goal: string; createdAt: string }> = [];
+      UNION ALL
 
-  while (currentId) {
-    const parent = db.prepare(`
-      SELECT c.parent_id, p.id, p.goal_short, p.created_at
+      -- Recursive: 부모 찾기
+      SELECT c.id, c.goal_short, c.created_at, pc.depth - 1
       FROM contexts c
-      LEFT JOIN contexts p ON c.parent_id = p.id
-      WHERE c.id = ?
-    `).get(currentId) as {
-      parent_id: string | null;
-      id: string | null;
-      goal_short: string | null;
-      created_at: string | null;
-    } | undefined;
+      JOIN parent_chain pc ON c.id = (
+        SELECT parent_id FROM contexts WHERE id = pc.id
+      )
+      WHERE pc.depth > -10
+    ),
+    -- 자식들 (depth = 1)
+    children AS (
+      SELECT id, goal_short, created_at, 1 as depth
+      FROM contexts
+      WHERE parent_id = ?
+    )
+    -- 부모 체인 + 자식 통합 (현재 제외 후 depth 0 다시 포함)
+    SELECT id, goal_short as goal, created_at as createdAt, depth
+    FROM (
+      SELECT * FROM parent_chain
+      UNION ALL
+      SELECT * FROM children
+    )
+    ORDER BY depth ASC, created_at ASC
+  `).all(contextId, contextId) as Array<{
+    id: string;
+    goal: string | null;
+    createdAt: string;
+    depth: number;
+  }>;
 
-    if (!parent || !parent.parent_id || !parent.id) break;
-
-    parentChain.unshift({
-      id: parent.id,
-      goal: parent.goal_short || '',
-      createdAt: parent.created_at || '',
-    });
-
-    currentId = parent.parent_id;
-
-    // 무한 루프 방지
-    if (parentChain.length > 10) break;
-  }
-
-  chain.push(...parentChain);
-
-  // 현재 컨텍스트
-  const current = db.prepare(`
-    SELECT id, goal_short, created_at FROM contexts WHERE id = ?
-  `).get(contextId) as { id: string; goal_short: string | null; created_at: string } | undefined;
-
-  if (current) {
-    chain.push({
-      id: current.id,
-      goal: current.goal_short || '',
-      createdAt: current.created_at,
-    });
-  }
-
-  // 자식 체인 조회
-  const children = db.prepare(`
-    SELECT id, goal_short, created_at
-    FROM contexts
-    WHERE parent_id = ?
-    ORDER BY created_at ASC
-  `).all(contextId) as Array<{ id: string; goal_short: string | null; created_at: string }>;
-
-  for (const child of children) {
-    chain.push({
-      id: child.id,
-      goal: child.goal_short || '',
-      createdAt: child.created_at,
-    });
-  }
-
-  return chain;
+  return chainRows.map((row) => ({
+    id: row.id,
+    goal: row.goal || '',
+    createdAt: row.createdAt,
+  }));
 }
 
 /**

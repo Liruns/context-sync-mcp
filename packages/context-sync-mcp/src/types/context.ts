@@ -453,3 +453,138 @@ export interface ContextSaveInput {
   codeChanges?: { modifiedFiles: string[]; summary: string };
   nextSteps?: string[];
 }
+
+// ========================================
+// v2.1 - 확장 기능 타입들
+// ========================================
+
+/**
+ * context_stats 입력
+ */
+export interface ContextStatsInput {
+  /** 통계 기간 */
+  range?: 'last_7_days' | 'last_30_days' | 'last_90_days' | 'all';
+}
+
+/**
+ * context_stats 출력
+ */
+export interface ContextStatsOutput {
+  /** 총 세션 수 */
+  totalSessions: number;
+  /** 상태별 세션 수 */
+  byStatus: Record<string, number>;
+  /** 에이전트별 세션 수 */
+  byAgent: Record<string, number>;
+  /** 상위 태그 */
+  topTags: Array<{ tag: string; count: number }>;
+  /** 실패한 접근법 수 */
+  failedApproaches: number;
+  /** 세션당 평균 액션 수 */
+  avgActionsPerSession: number;
+  /** 통계 기간 */
+  dateRange: {
+    from: string;
+    to: string;
+  };
+}
+
+/**
+ * context_export 입력
+ */
+export interface ContextExportInput {
+  /** 출력 형식 (필수) */
+  format: 'markdown' | 'json' | 'html';
+  /** 날짜 범위 */
+  range?: {
+    from?: string;
+    to?: string;
+  };
+  /** 특정 컨텍스트 ID 목록 */
+  contextIds?: string[];
+  /** 출력 파일 경로 (없으면 내용 반환) */
+  output?: string;
+}
+
+/**
+ * context_export 출력
+ */
+export interface ContextExportOutput {
+  /** 내용 (output이 없을 때) */
+  content?: string;
+  /** 파일 경로 (output이 있을 때) */
+  filePath?: string;
+  /** 내보낸 컨텍스트 수 */
+  exportedCount: number;
+}
+
+/**
+ * context_recommend 입력
+ */
+export interface ContextRecommendInput {
+  /** 현재 작업 목표 */
+  currentGoal: string;
+  /** 최대 추천 수 (기본 5) */
+  limit?: number;
+}
+
+/**
+ * context_recommend 출력
+ */
+export interface ContextRecommendOutput {
+  recommendations: Array<{
+    /** 컨텍스트 ID */
+    id: string;
+    /** 목표 */
+    goal: string;
+    /** 요약 */
+    summary: string;
+    /** 관련성 */
+    relevance: 'high' | 'medium' | 'low';
+    /** 매칭된 태그 */
+    matchedTags: string[];
+    /** 실패한 접근법 (경고용) */
+    failedApproaches?: string[];
+  }>;
+}
+
+/**
+ * 강화된 경고 (v2.1)
+ */
+export interface EnhancedWarning {
+  /** 관련 컨텍스트 ID */
+  contextId: string;
+  /** 경고 타입 */
+  type: 'failed_approach' | 'unresolved_blocker' | 'repeated_failure';
+  /** 경고 메시지 */
+  message: string;
+  /** 심각도 */
+  severity: 'info' | 'warning' | 'error';
+  /** 상세 정보 */
+  details?: {
+    failureCount?: number;
+    lastFailureDate?: string;
+    similarGoals?: string[];
+  };
+}
+
+/**
+ * 전역 검색용 scope 확장 (v2.1)
+ */
+export type SearchScope = 'project' | 'global';
+
+/**
+ * 전역 컨텍스트 레코드 (global.db용)
+ */
+export interface GlobalContextRecord {
+  id: string;
+  project_path: string;
+  goal: string;
+  goal_short: string | null;
+  summary_short: string | null;
+  status: string | null;
+  tags: string;
+  has_warnings: number;
+  created_at: string;
+  updated_at: string;
+}
