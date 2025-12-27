@@ -1,4 +1,4 @@
-# Context Sync MCP v2.2.0
+# Context Sync MCP v2.3.0
 
 AI 에이전트 간 컨텍스트 자동 동기화 MCP 서버
 
@@ -17,6 +17,9 @@ Cursor, Claude Code, Windsurf 등 여러 AI 코딩 도구에서 작업 컨텍스
 - **의사결정 기록**: 왜 특정 방식을 선택했는지 기록
 - **실패 기록**: 시도했지만 실패한 접근법 공유
 - **블로커 관리**: 막힌 부분 추적 및 해결
+- **스냅샷 관리**: 컨텍스트 스냅샷 생성/복원 (v2.3 신규)
+- **아카이브**: 완료된 작업 아카이브 (v2.3 신규)
+- **정리 도구**: 오래된 데이터 정리 (v2.3 신규)
 - **SQLite 저장**: sql.js 기반 히스토리 추적 및 검색
 
 ## 빠른 시작
@@ -42,16 +45,16 @@ npm install @liruns/context-sync-mcp
 }
 ```
 
-## 사용 가능한 도구 (7개)
+## 사용 가능한 도구 (12개)
 
-### 컨텍스트 관리
+### 컨텍스트 관리 (2개)
 
 | 도구 | 설명 |
 |------|------|
 | `context_save` | 작업 컨텍스트 저장 (목표, 상태, 다음 단계) |
 | `context_load` | 이전 컨텍스트 로드 (full/summary/decisions/blockers/next_steps) |
 
-### 기록 및 추적
+### 기록 및 추적 (5개)
 
 | 도구 | 설명 |
 |------|------|
@@ -60,6 +63,16 @@ npm install @liruns/context-sync-mcp
 | `blocker_add` | 블로커 추가 |
 | `blocker_resolve` | 블로커 해결 |
 | `handoff` | AI 에이전트 인수인계 |
+
+### 유지보수 도구 (5개) - v2.3 신규
+
+| 도구 | 설명 |
+|------|------|
+| `context_cleanup` | 오래된 데이터 정리 (30d, 7d, 2w, 1m) |
+| `context_archive` | 완료된 작업 아카이브 |
+| `snapshot_create` | 현재 컨텍스트 스냅샷 생성 |
+| `snapshot_restore` | 스냅샷에서 컨텍스트 복원 |
+| `snapshot_list` | 저장된 스냅샷 목록 조회 |
 
 ## 기본 워크플로우
 
@@ -80,6 +93,29 @@ npm install @liruns/context-sync-mcp
 > handoff to: "cursor" summary: "로그인 UI 구현 필요"
 ```
 
+### 스냅샷 관리 (v2.3 신규)
+
+```
+# 마일스톤 달성 시 스냅샷 저장
+> snapshot_create reason: "milestone" description: "인증 기능 완료"
+
+# 스냅샷 목록 확인
+> snapshot_list limit: 5
+
+# 이전 상태로 복원
+> snapshot_restore snapshotId: "snap_abc123"
+```
+
+### 정리 작업
+
+```
+# 30일 이상 된 데이터 정리 (미리보기)
+> context_cleanup olderThan: "30d" dryRun: true
+
+# 실제 정리 실행
+> context_cleanup olderThan: "30d" dryRun: false removeResolvedBlockers: true
+```
+
 ### 다른 AI에서 작업 재개
 
 ```
@@ -96,6 +132,7 @@ npm install @liruns/context-sync-mcp
 .context-sync/
 ├── config.json      # 설정
 ├── context.db       # SQLite DB (히스토리, 검색)
+├── archives/        # 아카이브된 컨텍스트
 └── snapshots/       # 스냅샷들
 ```
 
@@ -103,16 +140,16 @@ npm install @liruns/context-sync-mcp
 
 | AI 에디터 | 지원 |
 |-----------|------|
-| Claude Code | ✅ |
-| Cursor | ✅ |
-| Windsurf | ✅ |
-| GitHub Copilot | ✅ |
+| Claude Code | O |
+| Cursor | O |
+| Windsurf | O |
+| GitHub Copilot | O |
 
 | OS | 지원 |
 |----|------|
-| Windows | ✅ |
-| macOS | ✅ |
-| Linux | ✅ |
+| Windows | O |
+| macOS | O |
+| Linux | O |
 
 ## 개발
 
@@ -129,6 +166,23 @@ npm test
 # 개발 모드 (watch)
 npm run dev
 ```
+
+## 변경 이력
+
+### v2.3.0 (2024-12)
+- 유지보수 도구 추가 (Phase 1)
+  - `context_cleanup`: 오래된 데이터 정리
+  - `context_archive`: 완료된 작업 아카이브
+  - `snapshot_create/restore/list`: 스냅샷 관리
+- 도구 총 12개로 확장
+
+### v2.2.0
+- SQLite 저장소 안정화
+- 성능 개선
+
+### v2.0.0
+- SQLite 기반 저장소 도입
+- 히스토리 추적 기능
 
 ## 라이선스
 

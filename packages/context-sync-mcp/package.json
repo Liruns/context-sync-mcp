@@ -1,6 +1,6 @@
 {
   "name": "@liruns/context-sync-mcp",
-  "version": "2.0.0",
+  "version": "2.3.0",
   "description": "AI 에이전트 간 컨텍스트 자동 동기화 MCP 서버 / Automatic context sync MCP server for AI agents",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

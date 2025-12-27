@@ -65,16 +65,16 @@ Add to `~/.claude/mcp.json` or project's `.claude/mcp.json`:
 
 ---
 
-## Available Tools (7)
+## Available Tools (12)
 
-### Context Management
+### Context Management (2)
 
 | Tool | Description |
 |------|-------------|
 | `context_save` | Save work context (goal, status, next steps) |
 | `context_load` | Load previous context (full/summary/decisions/blockers/next_steps) |
 
-### Logging & Tracking
+### Logging & Tracking (5)
 
 | Tool | Description |
 |------|-------------|
@@ -83,6 +83,16 @@ Add to `~/.claude/mcp.json` or project's `.claude/mcp.json`:
 | `blocker_add` | Log blockers |
 | `blocker_resolve` | Mark blocker as resolved |
 | `handoff` | Handoff to another AI agent |
+
+### Maintenance Tools (5) - v2.3 New
+
+| Tool | Description |
+|------|-------------|
+| `context_cleanup` | Clean old data (30d, 7d, 2w, 1m) |
+| `context_archive` | Archive completed work |
+| `snapshot_create` | Create context snapshot |
+| `snapshot_restore` | Restore from snapshot |
+| `snapshot_list` | List saved snapshots |
 
 ---
 
@@ -105,6 +115,29 @@ Add to `~/.claude/mcp.json` or project's `.claude/mcp.json`:
 > handoff to: "cursor" summary: "Login UI implementation needed"
 ```
 
+### Snapshot Management (v2.3 New)
+
+```
+# Save snapshot at milestone
+> snapshot_create reason: "milestone" description: "Auth feature complete"
+
+# List snapshots
+> snapshot_list limit: 5
+
+# Restore previous state
+> snapshot_restore snapshotId: "snap_abc123"
+```
+
+### Cleanup
+
+```
+# Preview cleanup (dry run)
+> context_cleanup olderThan: "30d" dryRun: true
+
+# Execute cleanup
+> context_cleanup olderThan: "30d" dryRun: false removeResolvedBlockers: true
+```
+
 ### Resume Work in Another AI
 
 ```
@@ -125,6 +158,7 @@ Context is stored in `.context-sync/` folder at project root:
 <project>/.context-sync/
 ├── config.json       # Settings
 ├── context.db        # SQLite database (history, search)
+├── archives/         # Archived contexts
 └── snapshots/        # Snapshot backups
 ```
 
@@ -134,16 +168,16 @@ Context is stored in `.context-sync/` folder at project root:
 
 | AI Editor | Supported |
 |-----------|-----------|
-| Claude Code | ✅ |
-| Cursor | ✅ |
-| Windsurf | ✅ |
-| GitHub Copilot | ✅ |
+| Claude Code | O |
+| Cursor | O |
+| Windsurf | O |
+| GitHub Copilot | O |
 
 | OS | Supported |
 |----|-----------|
-| Windows | ✅ |
-| macOS | ✅ |
-| Linux | ✅ |
+| Windows | O |
+| macOS | O |
+| Linux | O |
 
 ---
 
@@ -170,6 +204,25 @@ npm test
 # Dev mode (watch)
 npm run dev
 ```
+
+---
+
+## Changelog
+
+### v2.3.0 (2024-12)
+- Added maintenance tools (Phase 1)
+  - `context_cleanup`: Clean old data
+  - `context_archive`: Archive completed work
+  - `snapshot_create/restore/list`: Snapshot management
+- Total 12 tools now available
+
+### v2.2.0
+- SQLite storage stabilization
+- Performance improvements
+
+### v2.0.0
+- SQLite-based storage
+- History tracking
 
 ---
 
