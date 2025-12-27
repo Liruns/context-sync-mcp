@@ -1,10 +1,11 @@
-# Context Sync MCP
+# Context Sync MCP v2.0
 
 Automatic context synchronization MCP server for AI agents
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
+[![Version](https://img.shields.io/badge/Version-2.0.0-blue.svg)](https://github.com/Liruns/context-sync-mcp)
 
 ## Overview
 
@@ -18,6 +19,16 @@ Context Sync MCP is an MCP (Model Context Protocol) server that enables seamless
 - **Decision logging**: Allow other AIs to understand why certain approaches were chosen
 - **Failure logging**: Share failed attempts to prevent repeating the same mistakes
 - **Work continuity**: Restore state to specific points using snapshots
+
+## v2.0 What's New
+
+- **SQLite Hybrid Storage**: JSON + SQLite (sql.js) dual storage for history tracking and search
+- **Token-Efficient Responses**: 2-stage response pattern saves 90% tokens (hints → details)
+- **FTS5 Full-Text Search**: Fast context search using SQLite FTS5
+- **Session Linking**: Track related work continuity (parentId)
+- **Failure Pattern Warnings**: Automatic warnings from previous failure records
+- **Cross-Project Search**: Search contexts across projects via global DB
+- **Archive System**: Archive and restore old contexts
 
 ## Key Features
 
@@ -33,8 +44,9 @@ Context Sync MCP is an MCP (Model Context Protocol) server that enables seamless
 | Snapshots | Save and restore state at specific points |
 | Auto-Sync | Automatic sync on file save, editor switch, Git commit |
 | Diff/Merge | Compare and merge snapshots |
-| Search | Full-text search across decisions, approaches, blockers |
+| Full-Text Search | FTS5-based context search |
 | Metrics | Track sync performance and work statistics |
+| Archive | Archive management for old contexts |
 
 ## Installation
 
@@ -102,46 +114,59 @@ Add MCP server in Windsurf settings:
 
 ## Usage
 
-### Natural Language Commands (New!)
+### Natural Language Commands
 
 Use the `ctx` tool with natural language:
 
 ```
-"save" / "저장해줘"        → Save context
-"load" / "불러와"          → Load previous context
-"status" / "상태"          → Check current status
-"summary" / "요약"         → Get context summary
-"auto on" / "자동저장 켜줘" → Start auto-sync
-"auto off" / "자동저장 꺼줘" → Stop auto-sync
+"save"        → Save context
+"load"        → Load previous context
+"status"      → Check current status
+"summary"     → Get context summary
+"auto on"     → Start auto-sync
+"auto off"    → Stop auto-sync
 ```
 
-### Session Start with Auto-Load
+### v2.0 Recommended Workflow (Token-Efficient)
 
 ```
-# Automatically load previous context when starting
-> session_start agent: "claude-code"
+1. Check warnings on session start
+   > context_warn currentGoal: "Implement login feature"
+   → ~100 tokens (previous failures, related session recommendations)
+
+2. Search when needed (hints only)
+   > context_search query: "authentication"
+   → ~200 tokens ({ hints: [{ id, goal, date, hasWarnings }] })
+
+3. Get details when needed
+   > context_get id: "ctx_abc123"
+   → ~500 tokens (full information)
+
+4. Save on session end
+   > context_save goal: "Login feature", summary: "JWT auth complete"
+   → ~50 tokens
 ```
 
 ### Basic Workflow
 
 ```
 1. Start work
-   > Save the goal "Implement login feature" with context_save
+   > context_save goal: "Implement login feature"
 
 2. Log decisions
-   > Log the decision "Use JWT" with decision_log. Reason: "Stateless, better than sessions"
+   > decision_log what: "Use JWT" why: "Stateless, better than sessions"
 
 3. Log attempts
-   > Log the attempt "Used passport.js" with attempt_log. Result: failed, reason: "Too complex"
+   > attempt_log approach: "Used passport.js" result: "failed" reason: "Too complex"
 
 4. Log blockers
-   > Add blocker "Refresh token storage location undecided" with blocker_add
+   > blocker_add description: "Refresh token storage location undecided"
 
 5. Handoff to another tool
-   > Handoff to Cursor. Summary: "JWT login implemented, need refresh token logic"
+   > handoff to: "cursor" summary: "JWT login implemented, need refresh token logic"
 
 6. Continue in another tool
-   > Load previous context with context_load
+   > context_load
 ```
 
 ### Auto-Sync
@@ -164,9 +189,9 @@ Configure in `.context-sync/config.json`:
 ```json
 {
   "automation": {
-    "autoLoad": true,    // Auto-load context on session start
-    "autoSave": true,    // Auto-save on changes
-    "autoSync": false    // Auto-start sync engine
+    "autoLoad": true,
+    "autoSave": true,
+    "autoSync": false
   }
 }
 ```
@@ -177,7 +202,7 @@ Use `automation_config` tool to view/modify:
 > automation_config autoLoad: true, autoSync: true
 ```
 
-## Available Tools (21)
+## Available Tools (25)
 
 ### Natural Language & Automation
 
@@ -187,14 +212,17 @@ Use `automation_config` tool to view/modify:
 | `session_start` | Start session with auto-load | - |
 | `automation_config` | Manage automation settings | - |
 
-### Context Management
+### Context Management (v2.0 Core)
 
-| Tool | Description | Required Parameters |
-|------|-------------|---------------------|
-| `context_save` | Save/update context | `goal` |
-| `context_load` | Load context | - |
-| `context_query` | Query specific info | `query` |
-| `context_summarize` | Summarize context (token-saving) | - |
+| Tool | Description | Est. Tokens |
+|------|-------------|-------------|
+| `context_save` | Save context | ~50 |
+| `context_search` | Hint-based search (token-efficient) | ~200 |
+| `context_get` | Get detailed context | ~500 |
+| `context_warn` | Session start warnings/recommendations | ~100 |
+| `context_load` | Load context (legacy) | - |
+| `context_query` | Query specific info (legacy) | - |
+| `context_summarize` | Summarize context | - |
 
 ### Logging
 
@@ -221,14 +249,28 @@ Use `automation_config` tool to view/modify:
 | `sync_stop` | Stop auto-sync | - |
 | `sync_status` | Check sync status | - |
 
-### Advanced Features (New!)
+### Advanced Features (v2.0+)
 
-| Tool | Description | Required Parameters |
-|------|-------------|---------------------|
+| Tool | Description | Version |
+|------|-------------|---------|
 | `context_diff` | Compare snapshots | - |
-| `context_merge` | Merge snapshots | `snapshotId` |
-| `context_search` | Search within context | `query` |
+| `context_merge` | Merge snapshots | - |
+| `context_stats` | Session statistics | v2.1 |
+| `context_export` | Export to Markdown/JSON/HTML | v2.1 |
+| `context_recommend` | Related session recommendations | v2.1 |
+| `context_archive` | Archive management (archive/restore/stats/search/list/purge) | v2.2 |
 | `metrics_report` | Performance metrics report | - |
+
+## Token Efficiency
+
+v2.0 uses a 2-stage response pattern to save 90% tokens:
+
+| Scenario | Before | v2.0 | Savings |
+|----------|--------|------|---------|
+| Search (20 results) | ~8,000 | ~400 | 95% |
+| Session start warning | ~2,000 | ~150 | 92% |
+| Detail view (1) | ~800 | ~500 | 37% |
+| **Typical usage** | **~10,000** | **~1,000** | **90%** |
 
 ## Storage Location
 
@@ -237,11 +279,15 @@ Context is stored in the `.context-sync/` folder at the project root:
 ```
 .context-sync/
 ├── config.json      # Configuration (including automation)
-├── current.json     # Current context
+├── current.json     # Current context (Git-trackable)
+├── history.db       # SQLite DB (history, search)
 └── snapshots/       # Snapshots
+
+~/.context-sync/
+└── global.db        # Global DB (cross-project search)
 ```
 
-> It's recommended to add `.context-sync/` to your `.gitignore`.
+> It's recommended to add `.context-sync/history.db` to your `.gitignore`.
 
 ## Development
 
@@ -278,43 +324,69 @@ npm run test:coverage
 ```
 src/
 ├── index.ts              # MCP server entry point
+├── db/
+│   ├── index.ts          # DB initialization (DatabaseInstance)
+│   ├── schema.ts         # Schema definitions
+│   └── global-db.ts      # Global DB
 ├── store/
-│   └── context-store.ts  # Context store
+│   ├── index.ts          # ContextStore (Facade)
+│   ├── context-store.ts  # JSON storage
+│   └── action-store.ts   # Action logging
+├── handlers/
+│   ├── index.ts          # Handler registry
+│   └── *.ts              # Tool handlers
+├── tools/
+│   └── *.ts              # v2.0 tool implementations
+├── services/
+│   └── archive-service.ts # Archive service
 ├── sync/
 │   └── sync-engine.ts    # Auto-sync engine
-├── watcher/
-│   └── editor-watcher.ts # Editor switch detection
-├── utils/
-│   └── summarizer.ts     # Context summarizer
 ├── diff/
 │   └── context-diff.ts   # Diff/Merge engine
 ├── search/
 │   └── context-search.ts # Search engine
 ├── metrics/
 │   └── metrics-collector.ts # Metrics collector
+├── constants/
+│   ├── errors.ts         # Error messages
+│   ├── limits.ts         # Limit values
+│   └── valid-values.ts   # Valid value constants
+├── validators/
+│   └── common.ts         # Common validators
+├── utils/
+│   └── truncate.ts       # Server-side summary generation
 └── types/
     └── context.ts        # Type definitions
 ```
 
-## Roadmap
+## Tech Stack
 
-### v0.2.0 ✅
-- [x] Natural language commands (`ctx`)
-- [x] Automation settings (autoLoad, autoSave, autoSync)
-- [x] Session start with auto-load
-- [x] Auto-sync engine (editor switch, file save, Git commit)
-- [x] Context summarization
+- **sql.js**: WebAssembly-based SQLite (no native compilation required)
+- **FTS5**: Full-text search support
+- **MCP SDK**: Model Context Protocol
+- **TypeScript**: Type safety
+- **Vitest**: Test framework
 
-### v0.3.0 ✅ (Current)
-- [x] Diff/Merge engine (compare and merge snapshots)
-- [x] Context search (search decisions, approaches, blockers)
-- [x] Performance metrics report
-- [x] Code quality improvements (type safety, error handling)
+## Version History
 
-### v1.0 (Planned)
-- [ ] Team sync (Git-based)
-- [ ] Cloud backup
-- [ ] Conflict resolution UI
+### v2.0.0 (Current)
+- SQLite hybrid storage (sql.js)
+- Token-efficient 2-stage response pattern
+- FTS5 full-text search
+- context_search, context_get, context_warn tools
+- context_stats, context_export, context_recommend tools (v2.1)
+- context_archive tool and archive system (v2.2)
+- Cross-project search (global.db)
+
+### v0.3.0
+- Diff/Merge engine
+- Context search
+- Performance metrics
+
+### v0.2.0
+- Natural language commands (`ctx`)
+- Automation settings
+- Auto-sync engine
 
 ## License
 
@@ -335,3 +407,4 @@ Bug reports, feature requests, and PRs are welcome!
 - [MCP Protocol Documentation](https://modelcontextprotocol.io/)
 - [Claude Code](https://claude.ai/code)
 - [GitHub Repository](https://github.com/Liruns/context-sync-mcp)
+- [v2.0 Implementation Plan](docs/v2.0-plan.md)
