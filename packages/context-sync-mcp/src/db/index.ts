@@ -474,6 +474,20 @@ export function getDatabaseStats(db: DatabaseInstance): {
 }
 
 /**
+ * FTS5 지원 여부 확인 (contexts_fts 테이블 존재 여부)
+ */
+export function hasFts5Support(db: DatabaseInstance): boolean {
+  try {
+    const result = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='contexts_fts'"
+    ).get() as { name: string } | undefined;
+    return !!result;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * FTS 검색 쿼리 빌더
  */
 export function buildFtsQuery(query: string): string {

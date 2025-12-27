@@ -4,7 +4,7 @@
  */
 
 import type { DatabaseInstance } from '../db/index.js';
-import { buildFtsQuery } from '../db/index.js';
+import { buildFtsQuery, hasFts5Support } from '../db/index.js';
 import type {
   ContextRecommendInput,
   ContextRecommendOutput,
@@ -141,22 +141,11 @@ export function recommendContexts(
   input: ContextRecommendInput
 ): ContextRecommendOutput {
   const limit = input.limit || DEFAULT_LIMIT;
-  const ftsQuery = buildFtsQuery(input.currentGoal);
 
-  // FTS로 후보 검색
-  const candidates = db
-    .prepare(
-      `
-      SELECT c.id, c.goal, c.goal_short, c.summary_short, c.status,
-             c.tags, c.metadata, c.has_warnings, c.created_at
-      FROM contexts c
-      JOIN contexts_fts fts ON c.id = fts.id
-      WHERE contexts_fts MATCH ?
-      ORDER BY rank
-      LIMIT ?
-    `
-    )
-    .all(ftsQuery, SEARCH_LIMIT) as Array<{
+  // FTS5 지원 여부 확인
+  const useFts = hasFts5Support(db);
+
+  let candidates: Array<{
     id: string;
     goal: string;
     goal_short: string | null;
@@ -167,6 +156,66 @@ export function recommendContexts(
     has_warnings: number;
     created_at: string;
   }>;
+
+  if (useFts) {
+    // FTS5 전문검색
+    const ftsQuery = buildFtsQuery(input.currentGoal);
+    candidates = db
+      .prepare(
+        `
+        SELECT c.id, c.goal, c.goal_short, c.summary_short, c.status,
+               c.tags, c.metadata, c.has_warnings, c.created_at
+        FROM contexts c
+        JOIN contexts_fts fts ON c.id = fts.id
+        WHERE contexts_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+      `
+      )
+      .all(ftsQuery, SEARCH_LIMIT) as typeof candidates;
+  } else {
+    // FTS5 미지원: LIKE 검색으로 fallback
+    const keywords = extractKeywords(input.currentGoal);
+    if (keywords.length === 0) {
+      // 키워드가 없으면 최신 컨텍스트 반환
+      candidates = db
+        .prepare(
+          `
+          SELECT id, goal, goal_short, summary_short, status,
+                 tags, metadata, has_warnings, created_at
+          FROM contexts
+          ORDER BY created_at DESC
+          LIMIT ?
+        `
+        )
+        .all(SEARCH_LIMIT) as typeof candidates;
+    } else {
+      // 키워드 기반 LIKE 검색
+      const likeConditions = keywords
+        .slice(0, 5) // 최대 5개 키워드만 사용
+        .map(() => '(goal LIKE ? OR summary LIKE ? OR tags LIKE ?)')
+        .join(' OR ');
+      const likeParams: string[] = [];
+      for (const kw of keywords.slice(0, 5)) {
+        const pattern = `%${kw}%`;
+        likeParams.push(pattern, pattern, pattern);
+      }
+      likeParams.push(String(SEARCH_LIMIT));
+
+      candidates = db
+        .prepare(
+          `
+          SELECT id, goal, goal_short, summary_short, status,
+                 tags, metadata, has_warnings, created_at
+          FROM contexts
+          WHERE ${likeConditions}
+          ORDER BY created_at DESC
+          LIMIT ?
+        `
+        )
+        .all(...likeParams) as typeof candidates;
+    }
+  }
 
   // 관련성 점수 계산 및 정렬
   const scored = candidates.map((ctx) => {

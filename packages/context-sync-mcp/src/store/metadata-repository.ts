@@ -120,7 +120,7 @@ export class MetadataRepository {
     }
 
     const blocker = context.conversationSummary.blockers.find(
-      (b) => b.id === blockerId
+      (b) => b.id === blockerId || b.id.startsWith(blockerId)
     );
     if (!blocker) {
       return null;

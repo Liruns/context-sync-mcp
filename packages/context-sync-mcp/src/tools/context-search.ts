@@ -6,7 +6,7 @@
  */
 
 import type { DatabaseInstance } from '../db/index.js';
-import { buildFtsQuery } from '../db/index.js';
+import { buildFtsQuery, hasFts5Support } from '../db/index.js';
 import { searchGlobalContexts } from '../db/global-db.js';
 import { formatDateShort } from '../utils/truncate.js';
 import type {
@@ -79,23 +79,44 @@ export function searchContexts(
   let countQuery: string;
   let countParams: unknown[] = [];
 
+  // FTS5 지원 여부 확인 (쿼리가 있을 때만 필요)
+  const useFts = input.query ? hasFts5Support(db) : false;
+
   if (input.query) {
-    // FTS5 전문검색
-    const ftsQuery = buildFtsQuery(input.query);
-    query = `
-      SELECT c.id, c.goal_short, c.created_at, c.has_warnings
-      FROM contexts c
-      JOIN contexts_fts fts ON c.id = fts.id
-      WHERE contexts_fts MATCH ?
-    `;
-    countQuery = `
-      SELECT COUNT(*) as count
-      FROM contexts c
-      JOIN contexts_fts fts ON c.id = fts.id
-      WHERE contexts_fts MATCH ?
-    `;
-    params = [ftsQuery];
-    countParams = [ftsQuery];
+
+    if (useFts) {
+      // FTS5 전문검색
+      const ftsQuery = buildFtsQuery(input.query);
+      query = `
+        SELECT c.id, c.goal_short, c.created_at, c.has_warnings
+        FROM contexts c
+        JOIN contexts_fts fts ON c.id = fts.id
+        WHERE contexts_fts MATCH ?
+      `;
+      countQuery = `
+        SELECT COUNT(*) as count
+        FROM contexts c
+        JOIN contexts_fts fts ON c.id = fts.id
+        WHERE contexts_fts MATCH ?
+      `;
+      params = [ftsQuery];
+      countParams = [ftsQuery];
+    } else {
+      // FTS5 미지원: LIKE 검색으로 fallback
+      const likePattern = `%${input.query}%`;
+      query = `
+        SELECT id, goal_short, created_at, has_warnings
+        FROM contexts
+        WHERE (goal LIKE ? OR summary LIKE ? OR tags LIKE ?)
+      `;
+      countQuery = `
+        SELECT COUNT(*) as count
+        FROM contexts
+        WHERE (goal LIKE ? OR summary LIKE ? OR tags LIKE ?)
+      `;
+      params = [likePattern, likePattern, likePattern];
+      countParams = [likePattern, likePattern, likePattern];
+    }
   } else {
     // 기본 쿼리
     query = `
@@ -124,8 +145,8 @@ export function searchContexts(
   if (input.tags && input.tags.length > 0) {
     // v2.2: context_tags 테이블 사용 (인덱스 활용, JSON LIKE 대비 10x+ 빠름)
     const placeholders = input.tags.map(() => '?').join(', ');
-    // FTS 쿼리에서는 c.id, 기본 쿼리에서는 id 참조
-    const idRef = input.query ? 'c.id' : 'id';
+    // FTS5 사용 시 c.id, 그 외에는 id 참조
+    const idRef = useFts ? 'c.id' : 'id';
     query += ` AND ${idRef} IN (SELECT context_id FROM context_tags WHERE tag IN (${placeholders}))`;
     countQuery += ` AND ${idRef} IN (SELECT context_id FROM context_tags WHERE tag IN (${placeholders}))`;
     params.push(...input.tags);
