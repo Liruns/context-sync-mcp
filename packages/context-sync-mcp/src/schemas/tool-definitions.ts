@@ -43,6 +43,120 @@ const contextTools: Tool[] = [
 ];
 
 /**
+ * 유지보수 도구 (v2.3)
+ */
+const maintenanceTools: Tool[] = [
+  {
+    name: "context_cleanup",
+    description: "오래된 데이터 정리 (decisions, approaches, blockers, snapshots)",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        olderThan: {
+          type: "string",
+          description: "삭제 기준 (예: 30d, 7d, 2w, 1m)",
+          default: "30d",
+        },
+        removeResolvedBlockers: {
+          type: "boolean",
+          description: "해결된 블로커 삭제",
+          default: false,
+        },
+        keepOnlySuccessful: {
+          type: "boolean",
+          description: "성공한 시도만 유지",
+          default: false,
+        },
+        removeCompleted: {
+          type: "boolean",
+          description: "완료된 컨텍스트 삭제",
+          default: false,
+        },
+        dryRun: {
+          type: "boolean",
+          description: "미리보기 모드 (삭제하지 않음)",
+          default: true,
+        },
+      },
+    },
+  },
+  {
+    name: "context_archive",
+    description: "완료된 작업 아카이브",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        reason: {
+          type: "string",
+          description: "아카이브 사유",
+        },
+        contextIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "특정 컨텍스트 ID들",
+        },
+        completedOnly: {
+          type: "boolean",
+          description: "완료된 컨텍스트만",
+          default: true,
+        },
+        deleteAfterArchive: {
+          type: "boolean",
+          description: "아카이브 후 원본 삭제",
+          default: false,
+        },
+      },
+    },
+  },
+  {
+    name: "snapshot_create",
+    description: "현재 컨텍스트 스냅샷 생성",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        reason: {
+          type: "string",
+          enum: ["manual", "milestone"],
+          default: "manual",
+        },
+        description: {
+          type: "string",
+          description: "스냅샷 설명",
+        },
+      },
+    },
+  },
+  {
+    name: "snapshot_restore",
+    description: "스냅샷에서 컨텍스트 복원",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        snapshotId: {
+          type: "string",
+          description: "복원할 스냅샷 ID",
+        },
+      },
+      required: ["snapshotId"],
+    },
+  },
+  {
+    name: "snapshot_list",
+    description: "저장된 스냅샷 목록 조회",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        limit: {
+          type: "number",
+          description: "조회 개수 제한",
+          default: 10,
+        },
+      },
+    },
+  },
+];
+
+/**
  * 메타데이터 관리 도구
  */
 const metadataTools: Tool[] = [
@@ -109,12 +223,14 @@ const metadataTools: Tool[] = [
 ];
 
 /**
- * 모든 도구 정의 (7개)
+ * 모든 도구 정의 (12개)
  * - contextTools: 2개 (context_save, context_load)
+ * - maintenanceTools: 5개 (context_cleanup, context_archive, snapshot_create, snapshot_restore, snapshot_list)
  * - metadataTools: 5개 (decision_log, attempt_log, blocker_add, blocker_resolve, handoff)
  */
 export const TOOLS: Tool[] = [
   ...contextTools,
+  ...maintenanceTools,
   ...metadataTools,
 ];
 

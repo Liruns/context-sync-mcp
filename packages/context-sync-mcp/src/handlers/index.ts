@@ -5,6 +5,7 @@
 
 import type { HandlerFn, HandlerContext, ToolResponse } from "./types.js";
 import { contextHandlers } from "./context-handlers.js";
+import { maintenanceHandlers } from "./maintenance-handlers.js";
 import { metadataHandlers } from "./metadata-handlers.js";
 
 export type { HandlerFn, HandlerContext, ToolResponse };
@@ -15,9 +16,10 @@ export { successResponse, errorResponse, requireDatabase } from "./types.js";
  */
 const handlers = new Map<string, HandlerFn>();
 
-// 각 모듈의 핸들러 등록 (7개 도구)
+// 각 모듈의 핸들러 등록 (12개 도구)
 const modules = [
   contextHandlers,
+  maintenanceHandlers,
   metadataHandlers,
 ];
 
@@ -90,4 +92,5 @@ export class HandlerRegistry {
 
 // 개별 핸들러 모듈 내보내기
 export { contextHandlers } from "./context-handlers.js";
+export { maintenanceHandlers } from "./maintenance-handlers.js";
 export { metadataHandlers } from "./metadata-handlers.js";

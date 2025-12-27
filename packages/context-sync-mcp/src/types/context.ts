@@ -588,3 +588,142 @@ export interface GlobalContextRecord {
   created_at: string;
   updated_at: string;
 }
+
+// ========================================
+// v2.3 - 유지보수 기능 타입들
+// ========================================
+
+/**
+ * context_cleanup 입력
+ */
+export interface ContextCleanupInput {
+  /** 삭제할 데이터 기간 (예: "30d", "7d", "90d") */
+  olderThan?: string;
+  /** 해결된 블로커 삭제 */
+  removeResolvedBlockers?: boolean;
+  /** 성공한 시도만 유지 (실패한 것 삭제) */
+  keepOnlySuccessful?: boolean;
+  /** 완료된 세션 삭제 */
+  removeCompleted?: boolean;
+  /** 미리보기 모드 (실제 삭제 안함) */
+  dryRun?: boolean;
+}
+
+/**
+ * context_cleanup 출력
+ */
+export interface ContextCleanupOutput {
+  /** 삭제된 항목 수 */
+  deleted: {
+    decisions: number;
+    approaches: number;
+    blockers: number;
+    contexts: number;
+    snapshots: number;
+  };
+  /** 남은 항목 수 */
+  remaining: {
+    decisions: number;
+    approaches: number;
+    blockers: number;
+    contexts: number;
+    snapshots: number;
+  };
+  /** 미리보기 모드 여부 */
+  dryRun: boolean;
+  /** 메시지 */
+  message: string;
+}
+
+/**
+ * context_archive 입력
+ */
+export interface ContextArchiveInput {
+  /** 아카이브 이유 */
+  reason?: string;
+  /** 아카이브할 컨텍스트 ID 목록 (없으면 완료된 것 모두) */
+  contextIds?: string[];
+  /** 완료된 세션만 아카이브 */
+  completedOnly?: boolean;
+  /** 아카이브 후 원본 삭제 */
+  deleteAfterArchive?: boolean;
+}
+
+/**
+ * context_archive 출력
+ */
+export interface ContextArchiveOutput {
+  /** 아카이브된 컨텍스트 수 */
+  archivedCount: number;
+  /** 아카이브 파일 경로 */
+  archivePath: string;
+  /** 삭제된 원본 수 */
+  deletedCount: number;
+  /** 메시지 */
+  message: string;
+}
+
+/**
+ * snapshot_create 입력
+ */
+export interface SnapshotCreateInput {
+  /** 스냅샷 이유 */
+  reason?: "manual" | "milestone";
+  /** 스냅샷 설명 */
+  description?: string;
+}
+
+/**
+ * snapshot_create 출력
+ */
+export interface SnapshotCreateOutput {
+  /** 스냅샷 ID */
+  id: string;
+  /** 스냅샷 생성 시간 */
+  createdAt: string;
+  /** 메시지 */
+  message: string;
+}
+
+/**
+ * snapshot_restore 입력
+ */
+export interface SnapshotRestoreInput {
+  /** 복원할 스냅샷 ID */
+  snapshotId: string;
+}
+
+/**
+ * snapshot_restore 출력
+ */
+export interface SnapshotRestoreOutput {
+  /** 복원 성공 여부 */
+  success: boolean;
+  /** 복원된 컨텍스트 목표 */
+  restoredGoal?: string;
+  /** 메시지 */
+  message: string;
+}
+
+/**
+ * snapshot_list 입력
+ */
+export interface SnapshotListInput {
+  /** 결과 제한 */
+  limit?: number;
+}
+
+/**
+ * snapshot_list 출력
+ */
+export interface SnapshotListOutput {
+  /** 스냅샷 목록 */
+  snapshots: Array<{
+    id: string;
+    reason: string;
+    goal: string;
+    createdAt: string;
+  }>;
+  /** 전체 개수 */
+  total: number;
+}

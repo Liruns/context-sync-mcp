@@ -26,6 +26,10 @@ import type {
   ContextWarnInput,
   ContextWarnOutput,
   ContextSaveInput,
+  ContextCleanupInput,
+  ContextCleanupOutput,
+  ContextArchiveInput,
+  ContextArchiveOutput,
 } from "../types/index.js";
 
 // 모듈 임포트
@@ -484,5 +488,305 @@ export class ContextStore {
     } catch (err) {
       console.error("액션 로그 저장 실패:", err);
     }
+  }
+
+  // ========================================
+  // v2.3 유지보수 메서드들
+  // ========================================
+
+  /**
+   * 기간 문자열을 Date로 변환 (예: "30d" -> 30일 전)
+   */
+  private parseDuration(duration: string): Date {
+    const match = duration.match(/^(\d+)(d|w|m)$/);
+    if (!match) {
+      return new Date(Date.now() - 30 * 24 * 60 * 60 * 1000); // 기본 30일
+    }
+    const value = parseInt(match[1], 10);
+    const unit = match[2];
+    const now = Date.now();
+    switch (unit) {
+      case "d":
+        return new Date(now - value * 24 * 60 * 60 * 1000);
+      case "w":
+        return new Date(now - value * 7 * 24 * 60 * 60 * 1000);
+      case "m":
+        return new Date(now - value * 30 * 24 * 60 * 60 * 1000);
+      default:
+        return new Date(now - 30 * 24 * 60 * 60 * 1000);
+    }
+  }
+
+  /**
+   * 컨텍스트 정리 (v2.3)
+   */
+  async cleanupContexts(input: ContextCleanupInput): Promise<ContextCleanupOutput> {
+    const {
+      olderThan = "30d",
+      removeResolvedBlockers = false,
+      keepOnlySuccessful = false,
+      removeCompleted = false,
+      dryRun = true,
+    } = input;
+
+    const cutoffDate = this.parseDuration(olderThan);
+    const cutoffISO = cutoffDate.toISOString();
+
+    const deleted = {
+      decisions: 0,
+      approaches: 0,
+      blockers: 0,
+      contexts: 0,
+      snapshots: 0,
+    };
+
+    const context = await this.getContext();
+    if (context) {
+      const summary = context.conversationSummary;
+
+      // 오래된 decisions 카운트
+      const oldDecisions = summary.keyDecisions.filter(
+        (d) => new Date(d.timestamp) < cutoffDate
+      );
+      deleted.decisions = oldDecisions.length;
+
+      // 오래된 approaches 카운트
+      let oldApproaches = summary.triedApproaches.filter(
+        (a) => new Date(a.timestamp) < cutoffDate
+      );
+      if (keepOnlySuccessful) {
+        oldApproaches = oldApproaches.filter((a) => a.result !== "success");
+      }
+      deleted.approaches = oldApproaches.length;
+
+      // 해결된 blockers 카운트
+      if (removeResolvedBlockers) {
+        deleted.blockers = summary.blockers.filter((b) => b.resolved).length;
+      }
+
+      // 실제 삭제 수행
+      if (!dryRun && context) {
+        // decisions 정리
+        context.conversationSummary.keyDecisions = summary.keyDecisions.filter(
+          (d) => new Date(d.timestamp) >= cutoffDate
+        );
+
+        // approaches 정리
+        if (keepOnlySuccessful) {
+          context.conversationSummary.triedApproaches = summary.triedApproaches.filter(
+            (a) => new Date(a.timestamp) >= cutoffDate || a.result === "success"
+          );
+        } else {
+          context.conversationSummary.triedApproaches = summary.triedApproaches.filter(
+            (a) => new Date(a.timestamp) >= cutoffDate
+          );
+        }
+
+        // blockers 정리
+        if (removeResolvedBlockers) {
+          context.conversationSummary.blockers = summary.blockers.filter(
+            (b) => !b.resolved
+          );
+        }
+
+        // 저장
+        await this.contextRepo.updateContext({
+          goal: context.currentWork.goal,
+        });
+      }
+    }
+
+    // 스냅샷 정리
+    const snapshots = await this.listSnapshots();
+    const oldSnapshots = snapshots.filter(
+      (s) => new Date(s.timestamp) < cutoffDate
+    );
+    deleted.snapshots = oldSnapshots.length;
+
+    if (!dryRun) {
+      for (const snapshot of oldSnapshots) {
+        const snapshotPath = path.join(
+          this.storePath,
+          "snapshots",
+          `${snapshot.id}.json`
+        );
+        try {
+          await fs.unlink(snapshotPath);
+        } catch {
+          // 파일 없으면 무시
+        }
+      }
+    }
+
+    // 완료된 컨텍스트 삭제 (DB)
+    if (removeCompleted && this.db && this.dbEnabled) {
+      try {
+        const countResult = this.db
+          .prepare(
+            `SELECT COUNT(*) as count FROM contexts WHERE status = 'completed' AND created_at < ?`
+          )
+          .get(cutoffISO) as { count: number } | undefined;
+        deleted.contexts = countResult?.count || 0;
+
+        if (!dryRun) {
+          this.db
+            .prepare(
+              `DELETE FROM contexts WHERE status = 'completed' AND created_at < ?`
+            )
+            .run(cutoffISO);
+        }
+      } catch (err) {
+        console.error("DB 정리 실패:", err);
+      }
+    }
+
+    // 남은 항목 카운트
+    const remaining = {
+      decisions: context?.conversationSummary.keyDecisions.length || 0,
+      approaches: context?.conversationSummary.triedApproaches.length || 0,
+      blockers: context?.conversationSummary.blockers.length || 0,
+      contexts: 0,
+      snapshots: snapshots.length - deleted.snapshots,
+    };
+
+    if (this.db && this.dbEnabled) {
+      try {
+        const contextCount = this.db
+          .prepare(`SELECT COUNT(*) as count FROM contexts`)
+          .get() as { count: number } | undefined;
+        remaining.contexts = contextCount?.count || 0;
+      } catch {
+        // 무시
+      }
+    }
+
+    const totalDeleted =
+      deleted.decisions +
+      deleted.approaches +
+      deleted.blockers +
+      deleted.contexts +
+      deleted.snapshots;
+
+    return {
+      deleted,
+      remaining,
+      dryRun,
+      message: dryRun
+        ? `미리보기: ${totalDeleted}개 항목이 삭제 대상입니다. 실제 삭제하려면 dryRun: false로 설정하세요.`
+        : `${totalDeleted}개 항목이 삭제되었습니다.`,
+    };
+  }
+
+  /**
+   * 컨텍스트 아카이브 (v2.3)
+   */
+  async archiveContexts(input: ContextArchiveInput): Promise<ContextArchiveOutput> {
+    const {
+      reason = "archived",
+      contextIds,
+      completedOnly = true,
+      deleteAfterArchive = false,
+    } = input;
+
+    const archiveDir = path.join(this.storePath, "archives");
+    await fs.mkdir(archiveDir, { recursive: true });
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const archiveFileName = `archive-${timestamp}.json`;
+    const archivePath = path.join(archiveDir, archiveFileName);
+
+    const toArchive: SharedContext[] = [];
+    let deletedCount = 0;
+
+    // 현재 컨텍스트 아카이브
+    const context = await this.getContext();
+    if (context) {
+      const shouldArchive =
+        !contextIds || contextIds.includes(context.id);
+      const isCompleted = context.currentWork.status === "completed";
+
+      if (shouldArchive && (!completedOnly || isCompleted)) {
+        toArchive.push(context);
+      }
+    }
+
+    // DB에서 컨텍스트 가져오기
+    if (this.db && this.dbEnabled) {
+      try {
+        let query = `SELECT * FROM contexts`;
+        const params: string[] = [];
+
+        if (contextIds && contextIds.length > 0) {
+          query += ` WHERE id IN (${contextIds.map(() => "?").join(",")})`;
+          params.push(...contextIds);
+        } else if (completedOnly) {
+          query += ` WHERE status = 'completed'`;
+        }
+
+        const rows = this.db.prepare(query).all(...params) as Array<{
+          id: string;
+          goal: string;
+          status: string;
+          metadata: string;
+          created_at: string;
+        }>;
+
+        for (const row of rows) {
+          // 이미 추가된 것 제외
+          if (!toArchive.find((c) => c.id === row.id)) {
+            toArchive.push({
+              id: row.id,
+              projectPath: this.storePath,
+              currentWork: {
+                goal: row.goal,
+                status: row.status as any,
+                startedAt: new Date(row.created_at),
+                lastActiveAt: new Date(row.created_at),
+              },
+              conversationSummary: JSON.parse(row.metadata || "{}"),
+              codeChanges: {
+                modifiedFiles: [],
+                summary: "",
+                uncommittedChanges: false,
+              },
+              agentChain: [],
+              createdAt: new Date(row.created_at),
+              updatedAt: new Date(row.created_at),
+              version: 1,
+            } as SharedContext);
+          }
+        }
+      } catch (err) {
+        console.error("DB 아카이브 조회 실패:", err);
+      }
+    }
+
+    // 아카이브 파일 저장
+    const archiveData = {
+      reason,
+      createdAt: new Date().toISOString(),
+      contexts: toArchive,
+    };
+
+    await fs.writeFile(archivePath, JSON.stringify(archiveData, null, 2));
+
+    // 원본 삭제
+    if (deleteAfterArchive && this.db && this.dbEnabled) {
+      try {
+        for (const ctx of toArchive) {
+          this.db.prepare(`DELETE FROM contexts WHERE id = ?`).run(ctx.id);
+          deletedCount++;
+        }
+      } catch (err) {
+        console.error("원본 삭제 실패:", err);
+      }
+    }
+
+    return {
+      archivedCount: toArchive.length,
+      archivePath,
+      deletedCount,
+      message: `${toArchive.length}개 컨텍스트가 아카이브되었습니다: ${archivePath}`,
+    };
   }
 }
