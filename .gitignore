@@ -2,6 +2,13 @@
 .claude/settings.local.json
 .claude/mcp.local.json
 CLAUDE.local.md
+.mcp.json
+
+# Context Sync 로컬 데이터
+.context-sync/
+
+# Windows NUL 파일
+nul
 
 # 로그
 .claude/logs/
