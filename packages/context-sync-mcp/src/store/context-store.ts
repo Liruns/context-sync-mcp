@@ -408,6 +408,8 @@ export class ContextStore {
             now.toISOString(),
             1
           );
+        // sql.js는 메모리 기반이므로 명시적 저장 필요
+        this.db.save();
       } catch (err) {
         console.error("DB 저장 실패:", err);
       }
@@ -485,6 +487,7 @@ export class ContextStore {
           filePath || null,
           new Date().toISOString()
         );
+      this.db.save();
     } catch (err) {
       console.error("액션 로그 저장 실패:", err);
     }
@@ -634,6 +637,7 @@ export class ContextStore {
               `DELETE FROM contexts WHERE status = 'completed' AND created_at < ?`
             )
             .run(cutoffISO);
+          this.db.save();
         }
       } catch (err) {
         console.error("DB 정리 실패:", err);
@@ -777,6 +781,7 @@ export class ContextStore {
           this.db.prepare(`DELETE FROM contexts WHERE id = ?`).run(ctx.id);
           deletedCount++;
         }
+        this.db.save();
       } catch (err) {
         console.error("원본 삭제 실패:", err);
       }
