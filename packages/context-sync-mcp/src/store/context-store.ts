@@ -1,6 +1,8 @@
 /**
- * Context Store - 컨텍스트 저장소 인터페이스 및 구현
- * v2.0: SQLite 하이브리드 저장소
+ * Context Store - 컨텍스트 저장소 파사드
+ * v2.0: SQLite 하이브리드 저장소 + 모듈화
+ *
+ * 이 클래스는 파사드 패턴을 사용하여 여러 레포지토리를 통합 인터페이스로 제공합니다.
  */
 
 import * as fs from "fs/promises";
@@ -17,7 +19,6 @@ import type {
   AgentHandoff,
   AgentType,
   ContextSyncConfig,
-  // v2.0 타입들
   ContextSearchInput,
   ContextSearchOutput,
   ContextGetInput,
@@ -27,182 +28,84 @@ import type {
   ContextSaveInput,
 } from "../types/index.js";
 
-// v2.0 imports
-import { initDatabaseAsync, closeDatabase, type DatabaseInstance } from "../db/index.js";
+// 모듈 임포트
+import {
+  ConfigManager,
+  DEFAULT_CONFIG,
+  type ConfigValidationResult,
+} from "./config-manager.js";
+import { ContextRepository } from "./context-repository.js";
+import { MetadataRepository } from "./metadata-repository.js";
+import { SnapshotRepository } from "./snapshot-repository.js";
+
+// DB 임포트
+import {
+  initDatabaseAsync,
+  closeDatabase,
+  type DatabaseInstance,
+} from "../db/index.js";
 import { migrateFromJSON, needsMigration } from "../db/migrate.js";
-import { generateGoalShort, generateSummaryShort, hasWarnings } from "../utils/truncate.js";
+import {
+  generateGoalShort,
+  generateSummaryShort,
+  hasWarnings,
+} from "../utils/truncate.js";
 import { searchContexts as dbSearchContexts } from "../tools/context-search.js";
 import { getContext as dbGetContext } from "../tools/context-get.js";
 import { getContextWarnings as dbGetWarnings } from "../tools/context-warn.js";
 
-/** 기본 설정 */
-const DEFAULT_CONFIG: ContextSyncConfig = {
-  syncMode: "seamless",
-  triggers: {
-    editorSwitch: true,
-    fileSave: true,
-    idleMinutes: 5,
-    gitCommit: true,
-  },
-  storage: {
-    location: ".context-sync",
-    maxSnapshots: 100,
-    compressionLevel: "medium",
-  },
-  adapters: {
-    "claude-code": { enabled: true },
-    cursor: { enabled: true },
-    windsurf: { enabled: true },
-    copilot: { enabled: false },
-    unknown: { enabled: true },
-  },
-  privacy: {
-    excludePatterns: ["*.env", "*secret*", "*password*", "*.pem", "*.key"],
-    localOnly: true,
-  },
-  automation: {
-    autoLoad: true,
-    autoSave: true,
-    autoSync: false,
-  },
-};
-
-/** 설정 검증 결과 */
-export interface ConfigValidationResult {
-  valid: boolean;
-  errors: string[];
-  warnings: string[];
-}
-
-/** 설정 검증 상수 */
-const CONFIG_LIMITS = {
-  MIN_IDLE_MINUTES: 1,
-  MAX_IDLE_MINUTES: 60,
-  MIN_MAX_SNAPSHOTS: 1,
-  MAX_MAX_SNAPSHOTS: 1000,
-  VALID_SYNC_MODES: ["seamless", "ask", "manual"] as const,
-  VALID_COMPRESSION_LEVELS: ["none", "low", "medium", "high"] as const,
-} as const;
+// 타입 재내보내기 (하위 호환성)
+export type { ConfigValidationResult };
 
 /**
- * 설정 검증 함수
- */
-function validateConfig(config: Partial<ContextSyncConfig>): ConfigValidationResult {
-  const errors: string[] = [];
-  const warnings: string[] = [];
-
-  // triggers 검증
-  if (config.triggers) {
-    const { idleMinutes } = config.triggers;
-    if (idleMinutes !== undefined) {
-      if (typeof idleMinutes !== "number" || !Number.isInteger(idleMinutes)) {
-        errors.push("triggers.idleMinutes는 정수여야 합니다");
-      } else if (idleMinutes < CONFIG_LIMITS.MIN_IDLE_MINUTES) {
-        errors.push(`triggers.idleMinutes는 ${CONFIG_LIMITS.MIN_IDLE_MINUTES}분 이상이어야 합니다`);
-      } else if (idleMinutes > CONFIG_LIMITS.MAX_IDLE_MINUTES) {
-        warnings.push(`triggers.idleMinutes가 ${CONFIG_LIMITS.MAX_IDLE_MINUTES}분을 초과합니다. 권장하지 않습니다`);
-      }
-    }
-  }
-
-  // storage 검증
-  if (config.storage) {
-    const { maxSnapshots, compressionLevel, location } = config.storage;
-
-    if (maxSnapshots !== undefined) {
-      if (typeof maxSnapshots !== "number" || !Number.isInteger(maxSnapshots)) {
-        errors.push("storage.maxSnapshots는 정수여야 합니다");
-      } else if (maxSnapshots < CONFIG_LIMITS.MIN_MAX_SNAPSHOTS) {
-        errors.push(`storage.maxSnapshots는 ${CONFIG_LIMITS.MIN_MAX_SNAPSHOTS} 이상이어야 합니다`);
-      } else if (maxSnapshots > CONFIG_LIMITS.MAX_MAX_SNAPSHOTS) {
-        warnings.push(`storage.maxSnapshots가 ${CONFIG_LIMITS.MAX_MAX_SNAPSHOTS}을 초과합니다. 디스크 공간에 주의하세요`);
-      }
-    }
-
-    if (compressionLevel !== undefined) {
-      if (!CONFIG_LIMITS.VALID_COMPRESSION_LEVELS.includes(compressionLevel as typeof CONFIG_LIMITS.VALID_COMPRESSION_LEVELS[number])) {
-        errors.push(`storage.compressionLevel은 ${CONFIG_LIMITS.VALID_COMPRESSION_LEVELS.join(", ")} 중 하나여야 합니다`);
-      }
-    }
-
-    if (location !== undefined && typeof location !== "string") {
-      errors.push("storage.location은 문자열이어야 합니다");
-    }
-  }
-
-  // syncMode 검증
-  if (config.syncMode !== undefined) {
-    if (!CONFIG_LIMITS.VALID_SYNC_MODES.includes(config.syncMode as typeof CONFIG_LIMITS.VALID_SYNC_MODES[number])) {
-      errors.push(`syncMode는 ${CONFIG_LIMITS.VALID_SYNC_MODES.join(", ")} 중 하나여야 합니다`);
-    }
-  }
-
-  // privacy 검증
-  if (config.privacy) {
-    if (config.privacy.excludePatterns !== undefined && !Array.isArray(config.privacy.excludePatterns)) {
-      errors.push("privacy.excludePatterns는 배열이어야 합니다");
-    }
-  }
-
-  return {
-    valid: errors.length === 0,
-    errors,
-    warnings,
-  };
-}
-
-/**
- * 컨텍스트 저장소 클래스
+ * 컨텍스트 저장소 클래스 (파사드)
  * v2.0: SQLite 하이브리드 저장소
  */
 export class ContextStore {
-  private config: ContextSyncConfig;
+  // 레포지토리들
+  private configManager: ConfigManager;
+  private contextRepo: ContextRepository;
+  private metadataRepo: MetadataRepository;
+  private snapshotRepo: SnapshotRepository;
+
+  // DB 관련
+  private db: DatabaseInstance | null = null;
+  private dbEnabled: boolean = false;
   private storePath: string;
-  private currentContext: SharedContext | null = null;
-  private db: DatabaseInstance | null = null;  // v2.0 SQLite
-  private dbEnabled: boolean = false;  // DB 활성화 여부
 
   constructor(projectPath: string, config?: Partial<ContextSyncConfig>) {
-    this.config = { ...DEFAULT_CONFIG, ...config };
-    this.storePath = path.join(projectPath, this.config.storage.location);
+    const mergedConfig = { ...DEFAULT_CONFIG, ...config };
+    this.storePath = path.join(projectPath, mergedConfig.storage.location);
+
+    // 레포지토리 초기화
+    this.configManager = new ConfigManager(projectPath, config);
+    this.contextRepo = new ContextRepository(this.storePath);
+    this.metadataRepo = new MetadataRepository(this.contextRepo);
+    this.snapshotRepo = new SnapshotRepository(
+      this.storePath,
+      this.contextRepo,
+      mergedConfig.storage.maxSnapshots
+    );
   }
 
-  /**
-   * DB 인스턴스 가져오기 (v2.0)
-   */
-  getDatabase(): DatabaseInstance | null {
-    return this.db;
-  }
-
-  /**
-   * DB 활성화 여부 (v2.0)
-   */
-  isDbEnabled(): boolean {
-    return this.dbEnabled && this.db !== null;
-  }
+  // ========================================
+  // 초기화 및 종료
+  // ========================================
 
   /**
    * 저장소 초기화
-   * v2.0: SQLite DB 초기화 및 마이그레이션 포함
    */
   async initialize(): Promise<void> {
     await fs.mkdir(this.storePath, { recursive: true });
     await fs.mkdir(path.join(this.storePath, "snapshots"), { recursive: true });
 
-    // 설정 파일 로드 또는 생성
-    const configPath = path.join(this.storePath, "config.json");
-    try {
-      const configData = await fs.readFile(configPath, "utf-8");
-      const savedConfig = JSON.parse(configData);
-      this.config = { ...DEFAULT_CONFIG, ...savedConfig };
-    } catch {
-      await fs.writeFile(configPath, JSON.stringify(this.config, null, 2));
-    }
+    // 설정 로드
+    await this.configManager.load();
 
-    // 기존 컨텍스트 로드 시도
-    await this.loadCurrentContext();
+    // 컨텍스트 로드
+    await this.contextRepo.loadCurrentContext();
 
-    // v2.0: SQLite DB 초기화 (sql.js - WebAssembly 기반)
+    // v2.0: SQLite DB 초기화
     try {
       this.db = await initDatabaseAsync(this.storePath);
 
@@ -227,7 +130,7 @@ export class ContextStore {
   }
 
   /**
-   * 저장소 종료 (v2.0)
+   * 저장소 종료
    */
   async close(): Promise<void> {
     if (this.db) {
@@ -237,163 +140,122 @@ export class ContextStore {
     }
   }
 
+  // ========================================
+  // DB 접근
+  // ========================================
+
+  /**
+   * DB 인스턴스 가져오기
+   */
+  getDatabase(): DatabaseInstance | null {
+    return this.db;
+  }
+
+  /**
+   * DB 활성화 여부
+   */
+  isDbEnabled(): boolean {
+    return this.dbEnabled && this.db !== null;
+  }
+
+  // ========================================
+  // 설정 관리 (ConfigManager 위임)
+  // ========================================
+
   /**
    * 현재 설정 가져오기
    */
   getConfig(): ContextSyncConfig {
-    return this.config;
+    return this.configManager.getConfig();
   }
 
   /**
    * 설정 업데이트
-   * @throws 설정 검증 실패 시 에러 발생
    */
-  async updateConfig(updates: Partial<ContextSyncConfig>): Promise<{ config: ContextSyncConfig; warnings: string[] }> {
-    // 설정 검증
-    const validation = validateConfig(updates);
-    if (!validation.valid) {
-      throw new Error(`설정 검증 실패: ${validation.errors.join(", ")}`);
+  async updateConfig(
+    updates: Partial<ContextSyncConfig>
+  ): Promise<{ config: ContextSyncConfig; warnings: string[] }> {
+    const result = await this.configManager.updateConfig(updates);
+
+    // maxSnapshots 변경 시 SnapshotRepository에도 반영
+    if (updates.storage?.maxSnapshots !== undefined) {
+      this.snapshotRepo.setMaxSnapshots(updates.storage.maxSnapshots);
     }
 
-    this.config = { ...this.config, ...updates };
-    const configPath = path.join(this.storePath, "config.json");
-    await fs.writeFile(configPath, JSON.stringify(this.config, null, 2));
-
-    return {
-      config: this.config,
-      warnings: validation.warnings,
-    };
+    return result;
   }
 
   /**
-   * 설정 검증만 수행 (저장하지 않음)
+   * 설정 검증만 수행
    */
-  validateConfigUpdate(updates: Partial<ContextSyncConfig>): ConfigValidationResult {
-    return validateConfig(updates);
+  validateConfigUpdate(
+    updates: Partial<ContextSyncConfig>
+  ): ConfigValidationResult {
+    return this.configManager.validateUpdate(updates);
   }
 
-  /**
-   * 현재 컨텍스트 로드
-   */
-  private async loadCurrentContext(): Promise<void> {
-    const contextPath = path.join(this.storePath, "current.json");
-    try {
-      const data = await fs.readFile(contextPath, "utf-8");
-      this.currentContext = this.deserializeContext(JSON.parse(data));
-    } catch {
-      this.currentContext = null;
-    }
-  }
+  // ========================================
+  // 컨텍스트 CRUD (ContextRepository 위임)
+  // ========================================
 
   /**
    * 새 컨텍스트 생성
    */
   async createContext(input: CreateContextInput): Promise<SharedContext> {
-    const now = new Date();
-    const context: SharedContext = {
-      id: randomUUID(),
-      projectPath: input.projectPath,
-      currentWork: {
-        goal: input.goal,
-        status: "planning",
-        startedAt: now,
-        lastActiveAt: now,
-        activeFiles: [],
-      },
-      conversationSummary: {
-        keyDecisions: [],
-        triedApproaches: [],
-        blockers: [],
-        nextSteps: [],
-      },
-      codeChanges: {
-        modifiedFiles: [],
-        summary: "",
-        uncommittedChanges: false,
-      },
-      agentChain: input.agent
-        ? [
-            {
-              from: "unknown",
-              to: input.agent,
-              summary: "세션 시작",
-              timestamp: now,
-            },
-          ]
-        : [],
-      createdAt: now,
-      updatedAt: now,
-      version: 1,
-    };
-
-    this.currentContext = context;
-    await this.saveCurrentContext();
-    return context;
+    return this.contextRepo.createContext(input);
   }
 
   /**
    * 현재 컨텍스트 가져오기
    */
   async getContext(): Promise<SharedContext | null> {
-    if (!this.currentContext) {
-      await this.loadCurrentContext();
-    }
-    return this.currentContext;
+    return this.contextRepo.getContext();
   }
 
   /**
    * 컨텍스트 업데이트
    */
-  async updateContext(update: UpdateContextInput): Promise<SharedContext | null> {
-    if (!this.currentContext) {
-      return null;
-    }
-
-    const now = new Date();
-
-    if (update.goal !== undefined) {
-      this.currentContext.currentWork.goal = update.goal;
-    }
-    if (update.status !== undefined) {
-      this.currentContext.currentWork.status = update.status;
-    }
-    if (update.activeFiles !== undefined) {
-      this.currentContext.currentWork.activeFiles = update.activeFiles;
-    }
-    if (update.nextSteps !== undefined) {
-      this.currentContext.conversationSummary.nextSteps = update.nextSteps;
-    }
-
-    this.currentContext.currentWork.lastActiveAt = now;
-    this.currentContext.updatedAt = now;
-    this.currentContext.version += 1;
-
-    await this.saveCurrentContext();
-    return this.currentContext;
+  async updateContext(
+    update: UpdateContextInput
+  ): Promise<SharedContext | null> {
+    return this.contextRepo.updateContext(update);
   }
+
+  /**
+   * 코드 변경 업데이트
+   */
+  async updateCodeChanges(
+    modifiedFiles: string[],
+    summary: string,
+    uncommitted: boolean
+  ): Promise<void> {
+    return this.contextRepo.updateCodeChanges(
+      modifiedFiles,
+      summary,
+      uncommitted
+    );
+  }
+
+  /**
+   * 컨텍스트 요약 생성
+   */
+  async getSummary(): Promise<string> {
+    return this.contextRepo.getSummary();
+  }
+
+  // ========================================
+  // 메타데이터 (MetadataRepository 위임)
+  // ========================================
 
   /**
    * 의사결정 추가
    */
-  async addDecision(what: string, why: string, agent: AgentType = "unknown"): Promise<Decision> {
-    if (!this.currentContext) {
-      throw new Error("활성 컨텍스트가 없습니다");
-    }
-
-    const decision: Decision = {
-      id: randomUUID(),
-      what,
-      why,
-      madeBy: agent,
-      timestamp: new Date(),
-    };
-
-    this.currentContext.conversationSummary.keyDecisions.push(decision);
-    this.currentContext.updatedAt = new Date();
-    this.currentContext.version += 1;
-
-    await this.saveCurrentContext();
-    return decision;
+  async addDecision(
+    what: string,
+    why: string,
+    agent: AgentType = "unknown"
+  ): Promise<Decision> {
+    return this.metadataRepo.addDecision(what, why, agent);
   }
 
   /**
@@ -405,430 +267,98 @@ export class ContextStore {
     reason?: string,
     agent: AgentType = "unknown"
   ): Promise<Approach> {
-    if (!this.currentContext) {
-      throw new Error("활성 컨텍스트가 없습니다");
-    }
-
-    const approach: Approach = {
-      id: randomUUID(),
-      description,
-      result,
-      reason,
-      attemptedBy: agent,
-      timestamp: new Date(),
-    };
-
-    this.currentContext.conversationSummary.triedApproaches.push(approach);
-    this.currentContext.updatedAt = new Date();
-    this.currentContext.version += 1;
-
-    await this.saveCurrentContext();
-    return approach;
+    return this.metadataRepo.addApproach(description, result, reason, agent);
   }
 
   /**
    * 블로커 추가
    */
   async addBlocker(description: string): Promise<Blocker> {
-    if (!this.currentContext) {
-      throw new Error("활성 컨텍스트가 없습니다");
-    }
-
-    const blocker: Blocker = {
-      id: randomUUID(),
-      description,
-      resolved: false,
-      discoveredAt: new Date(),
-    };
-
-    this.currentContext.conversationSummary.blockers.push(blocker);
-    this.currentContext.updatedAt = new Date();
-    this.currentContext.version += 1;
-
-    await this.saveCurrentContext();
-    return blocker;
+    return this.metadataRepo.addBlocker(description);
   }
 
   /**
    * 블로커 해결
    */
-  async resolveBlocker(blockerId: string, resolution: string): Promise<Blocker | null> {
-    if (!this.currentContext) {
-      return null;
-    }
-
-    const blocker = this.currentContext.conversationSummary.blockers.find(
-      (b) => b.id === blockerId
-    );
-    if (!blocker) {
-      return null;
-    }
-
-    blocker.resolved = true;
-    blocker.resolvedAt = new Date();
-    blocker.resolution = resolution;
-
-    this.currentContext.updatedAt = new Date();
-    this.currentContext.version += 1;
-
-    await this.saveCurrentContext();
-    return blocker;
+  async resolveBlocker(
+    blockerId: string,
+    resolution: string
+  ): Promise<Blocker | null> {
+    return this.metadataRepo.resolveBlocker(blockerId, resolution);
   }
 
   /**
    * 에이전트 핸드오프 기록
    */
-  async recordHandoff(from: AgentType, to: AgentType, summary: string): Promise<AgentHandoff> {
-    if (!this.currentContext) {
-      throw new Error("활성 컨텍스트가 없습니다");
-    }
-
-    const handoff: AgentHandoff = {
-      from,
-      to,
-      summary,
-      timestamp: new Date(),
-    };
-
-    this.currentContext.agentChain.push(handoff);
-    this.currentContext.updatedAt = new Date();
-    this.currentContext.version += 1;
-
-    await this.saveCurrentContext();
-    return handoff;
+  async recordHandoff(
+    from: AgentType,
+    to: AgentType,
+    summary: string
+  ): Promise<AgentHandoff> {
+    return this.metadataRepo.recordHandoff(from, to, summary);
   }
 
-  /**
-   * 코드 변경 업데이트
-   */
-  async updateCodeChanges(
-    modifiedFiles: string[],
-    summary: string,
-    uncommitted: boolean
-  ): Promise<void> {
-    if (!this.currentContext) {
-      return;
-    }
-
-    this.currentContext.codeChanges = {
-      modifiedFiles,
-      summary,
-      uncommittedChanges: uncommitted,
-    };
-    this.currentContext.updatedAt = new Date();
-    this.currentContext.version += 1;
-
-    await this.saveCurrentContext();
-  }
+  // ========================================
+  // 스냅샷 (SnapshotRepository 위임)
+  // ========================================
 
   /**
    * 스냅샷 생성
    */
-  async createSnapshot(reason: "auto" | "manual" | "handoff" | "milestone"): Promise<ContextSnapshot | null> {
-    if (!this.currentContext) {
-      return null;
-    }
-
-    const snapshot: ContextSnapshot = {
-      id: randomUUID(),
-      contextId: this.currentContext.id,
-      data: { ...this.currentContext },
-      reason,
-      timestamp: new Date(),
-    };
-
-    const snapshotPath = path.join(
-      this.storePath,
-      "snapshots",
-      `${snapshot.id}.json`
-    );
-    await fs.writeFile(snapshotPath, JSON.stringify(snapshot, null, 2));
-
-    // 오래된 스냅샷 정리
-    await this.cleanupOldSnapshots();
-
-    return snapshot;
+  async createSnapshot(
+    reason: "auto" | "manual" | "handoff" | "milestone"
+  ): Promise<ContextSnapshot | null> {
+    return this.snapshotRepo.createSnapshot(reason);
   }
 
   /**
    * 스냅샷 목록 가져오기
    */
   async listSnapshots(): Promise<ContextSnapshot[]> {
-    const snapshotsDir = path.join(this.storePath, "snapshots");
-    try {
-      const files = await fs.readdir(snapshotsDir);
-      const snapshots: ContextSnapshot[] = [];
-
-      for (const file of files) {
-        if (file.endsWith(".json")) {
-          try {
-            const data = await fs.readFile(path.join(snapshotsDir, file), "utf-8");
-            snapshots.push(JSON.parse(data));
-          } catch (parseErr) {
-            // 손상된 스냅샷 파일 무시 (로깅만)
-            console.warn(`스냅샷 파일 읽기 실패: ${file}`, parseErr);
-          }
-        }
-      }
-
-      return snapshots.sort(
-        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-      );
-    } catch (err) {
-      // 디렉토리가 없는 경우 빈 배열 반환
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        return [];
-      }
-      console.error("스냅샷 목록 조회 실패:", err);
-      return [];
-    }
+    return this.snapshotRepo.listSnapshots();
   }
 
   /**
    * 스냅샷에서 복원
-   * @throws 복원 실패 시 상세 에러 정보 포함
    */
   async restoreFromSnapshot(snapshotId: string): Promise<SharedContext | null> {
-    const snapshotPath = path.join(
-      this.storePath,
-      "snapshots",
-      `${snapshotId}.json`
-    );
-    try {
-      const data = await fs.readFile(snapshotPath, "utf-8");
-      const snapshot: ContextSnapshot = JSON.parse(data);
-      this.currentContext = this.deserializeContext(snapshot.data as unknown as Record<string, unknown>);
-      this.currentContext.version += 1;
-      this.currentContext.updatedAt = new Date();
-      await this.saveCurrentContext();
-      return this.currentContext;
-    } catch (err) {
-      const errCode = (err as NodeJS.ErrnoException).code;
-      if (errCode === "ENOENT") {
-        console.warn(`스냅샷을 찾을 수 없음: ${snapshotId}`);
-      } else if (err instanceof SyntaxError) {
-        console.error(`스냅샷 JSON 파싱 실패: ${snapshotId}`, err);
-      } else {
-        console.error(`스냅샷 복원 실패: ${snapshotId}`, err);
-      }
-      return null;
-    }
-  }
-
-  /**
-   * 컨텍스트 요약 생성
-   */
-  async getSummary(): Promise<string> {
-    if (!this.currentContext) {
-      return "활성 컨텍스트가 없습니다.";
-    }
-
-    const ctx = this.currentContext;
-    const decisions = ctx.conversationSummary.keyDecisions
-      .slice(-3)
-      .map((d) => `- ${d.what}`)
-      .join("\n");
-    const blockers = ctx.conversationSummary.blockers
-      .filter((b) => !b.resolved)
-      .map((b) => `- ${b.description}`)
-      .join("\n");
-    const nextSteps = ctx.conversationSummary.nextSteps
-      .slice(0, 3)
-      .map((s) => `- ${s}`)
-      .join("\n");
-    const lastAgent = ctx.agentChain.at(-1);
-
-    return `
-## 작업 컨텍스트 요약
-
-**목표**: ${ctx.currentWork.goal}
-**상태**: ${ctx.currentWork.status}
-**마지막 활동**: ${lastAgent ? `${lastAgent.from} → ${lastAgent.to}` : "없음"}
-
-### 주요 결정사항
-${decisions || "없음"}
-
-### 해결되지 않은 블로커
-${blockers || "없음"}
-
-### 다음 단계
-${nextSteps || "없음"}
-
-### 변경된 파일
-${ctx.codeChanges.modifiedFiles.join(", ") || "없음"}
-`.trim();
-  }
-
-  /**
-   * 현재 컨텍스트 저장
-   */
-  private async saveCurrentContext(): Promise<void> {
-    if (!this.currentContext) {
-      return;
-    }
-
-    const contextPath = path.join(this.storePath, "current.json");
-    await fs.writeFile(
-      contextPath,
-      JSON.stringify(this.currentContext, null, 2)
-    );
-  }
-
-  /**
-   * 오래된 스냅샷 정리
-   * @returns 삭제된 스냅샷 수와 실패한 삭제 수
-   */
-  private async cleanupOldSnapshots(): Promise<{ deleted: number; failed: number }> {
-    const result = { deleted: 0, failed: 0 };
-
-    try {
-      const snapshots = await this.listSnapshots();
-      if (snapshots.length <= this.config.storage.maxSnapshots) {
-        return result;
-      }
-
-      const toDelete = snapshots.slice(this.config.storage.maxSnapshots);
-      for (const snapshot of toDelete) {
-        const snapshotPath = path.join(
-          this.storePath,
-          "snapshots",
-          `${snapshot.id}.json`
-        );
-        try {
-          await fs.unlink(snapshotPath);
-          result.deleted++;
-        } catch (err) {
-          result.failed++;
-          // 파일이 이미 없는 경우는 무시, 그 외는 로깅
-          if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-            console.error(`스냅샷 삭제 실패: ${snapshotPath}`, err);
-          }
-        }
-      }
-    } catch (err) {
-      console.error("스냅샷 정리 중 오류 발생:", err);
-    }
-
-    return result;
-  }
-
-  /**
-   * 컨텍스트 역직렬화 (Date 객체 복원)
-   * @throws 필수 필드가 없거나 형식이 잘못된 경우 에러 발생
-   */
-  private deserializeContext(data: Record<string, unknown>): SharedContext {
-    // 필수 필드 검증
-    this.validateRequiredFields(data, ["id", "projectPath", "createdAt", "updatedAt", "currentWork", "conversationSummary", "codeChanges", "agentChain", "version"]);
-
-    const currentWork = data.currentWork as Record<string, unknown>;
-    this.validateRequiredFields(currentWork, ["goal", "status", "startedAt", "lastActiveAt"]);
-
-    const conversationSummary = data.conversationSummary as Record<string, unknown>;
-    this.validateRequiredFields(conversationSummary, ["keyDecisions", "triedApproaches", "blockers", "nextSteps"]);
-
-    // 안전한 배열 변환 헬퍼
-    const safeArray = <T>(arr: unknown): T[] => {
-      return Array.isArray(arr) ? arr : [];
-    };
-
-    // 안전한 Date 변환 헬퍼
-    const safeDate = (value: unknown): Date => {
-      if (value instanceof Date) return value;
-      if (typeof value === "string" || typeof value === "number") {
-        const date = new Date(value);
-        if (!isNaN(date.getTime())) return date;
-      }
-      return new Date(); // 기본값
-    };
-
-    return {
-      id: String(data.id),
-      projectPath: String(data.projectPath),
-      version: Number(data.version) || 1,
-      createdAt: safeDate(data.createdAt),
-      updatedAt: safeDate(data.updatedAt),
-      currentWork: {
-        goal: String(currentWork.goal),
-        status: currentWork.status as SharedContext["currentWork"]["status"],
-        startedAt: safeDate(currentWork.startedAt),
-        lastActiveAt: safeDate(currentWork.lastActiveAt),
-        activeFiles: safeArray<string>(currentWork.activeFiles),
-      },
-      conversationSummary: {
-        keyDecisions: safeArray<Decision>(conversationSummary.keyDecisions).map((d) => ({
-          ...d,
-          timestamp: safeDate(d.timestamp),
-        })),
-        triedApproaches: safeArray<Approach>(conversationSummary.triedApproaches).map((a) => ({
-          ...a,
-          timestamp: safeDate(a.timestamp),
-        })),
-        blockers: safeArray<Blocker>(conversationSummary.blockers).map((b) => ({
-          ...b,
-          discoveredAt: safeDate(b.discoveredAt),
-          resolvedAt: b.resolvedAt ? safeDate(b.resolvedAt) : undefined,
-        })),
-        nextSteps: safeArray<string>(conversationSummary.nextSteps),
-      },
-      codeChanges: {
-        modifiedFiles: safeArray<string>((data.codeChanges as Record<string, unknown>)?.modifiedFiles),
-        summary: String((data.codeChanges as Record<string, unknown>)?.summary || ""),
-        uncommittedChanges: Boolean((data.codeChanges as Record<string, unknown>)?.uncommittedChanges),
-        lastCommitHash: (data.codeChanges as Record<string, unknown>)?.lastCommitHash as string | undefined,
-      },
-      agentChain: safeArray<AgentHandoff>(data.agentChain).map((h) => ({
-        ...h,
-        timestamp: safeDate(h.timestamp),
-      })),
-    };
-  }
-
-  /**
-   * 필수 필드 검증 헬퍼
-   */
-  private validateRequiredFields(obj: Record<string, unknown>, fields: string[]): void {
-    for (const field of fields) {
-      if (!(field in obj) || obj[field] === undefined) {
-        throw new Error(`필수 필드 누락: ${field}`);
-      }
-    }
+    return this.snapshotRepo.restoreFromSnapshot(snapshotId);
   }
 
   // ========================================
-  // v2.0 - 토큰 효율적인 새 메서드들
+  // v2.0 토큰 효율적 메서드들
   // ========================================
 
   /**
    * 컨텍스트 저장 (v2.0 확장)
-   * DB와 JSON 모두에 저장
    */
-  async saveContext(input: ContextSaveInput): Promise<{ id: string; message: string }> {
+  async saveContext(
+    input: ContextSaveInput
+  ): Promise<{ id: string; message: string }> {
     const now = new Date();
     const id = randomUUID();
 
-    // 짧은 버전 생성
     const goalShort = generateGoalShort(input.goal);
     const summaryShort = generateSummaryShort(input.summary);
     const hasWarningsFlag = hasWarnings({
-      approaches: input.approaches?.map(a => ({ result: a.result })),
-      blockers: input.blockers?.map(b => ({ resolved: b.resolved ?? false })),
+      approaches: input.approaches?.map((a) => ({ result: a.result })),
+      blockers: input.blockers?.map((b) => ({ resolved: b.resolved ?? false })),
     });
 
-    // 메타데이터 구성
     const metadata = {
-      decisions: (input.decisions || []).map(d => ({
+      decisions: (input.decisions || []).map((d) => ({
         what: d.what,
         why: d.why,
-        madeBy: input.agent || 'unknown',
+        madeBy: input.agent || "unknown",
         timestamp: now.toISOString(),
       })),
-      approaches: (input.approaches || []).map(a => ({
+      approaches: (input.approaches || []).map((a) => ({
         description: a.description,
         result: a.result,
         reason: a.reason,
         timestamp: now.toISOString(),
       })),
-      blockers: (input.blockers || []).map(b => ({
+      blockers: (input.blockers || []).map((b) => ({
         description: b.description,
         resolved: b.resolved ?? false,
         resolution: b.resolution,
@@ -842,7 +372,9 @@ ${ctx.codeChanges.modifiedFiles.join(", ") || "없음"}
     // DB에 저장
     if (this.db && this.dbEnabled) {
       try {
-        this.db.prepare(`
+        this.db
+          .prepare(
+            `
           INSERT INTO contexts (
             id, parent_id, goal, goal_short, summary, summary_short,
             status, tags, agent, metadata, has_warnings, project_path,
@@ -852,26 +384,28 @@ ${ctx.codeChanges.modifiedFiles.join(", ") || "없음"}
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?
           )
-        `).run(
-          id,
-          input.parentId || null,
-          input.goal,
-          goalShort,
-          input.summary || null,
-          summaryShort,
-          input.status || 'planning',
-          JSON.stringify(input.tags || []),
-          input.agent || null,
-          JSON.stringify(metadata),
-          hasWarningsFlag ? 1 : 0,
-          this.storePath,
-          now.toISOString(),
-          now.toISOString(),
-          now.toISOString(),
-          1
-        );
+        `
+          )
+          .run(
+            id,
+            input.parentId || null,
+            input.goal,
+            goalShort,
+            input.summary || null,
+            summaryShort,
+            input.status || "planning",
+            JSON.stringify(input.tags || []),
+            input.agent || null,
+            JSON.stringify(metadata),
+            hasWarningsFlag ? 1 : 0,
+            this.storePath,
+            now.toISOString(),
+            now.toISOString(),
+            now.toISOString(),
+            1
+          );
       } catch (err) {
-        console.error('DB 저장 실패:', err);
+        console.error("DB 저장 실패:", err);
       }
     }
 
@@ -890,7 +424,6 @@ ${ctx.codeChanges.modifiedFiles.join(", ") || "없음"}
 
   /**
    * 컨텍스트 검색 (v2.0 힌트 기반)
-   * ~200 토큰 응답
    */
   searchContexts(input: ContextSearchInput): ContextSearchOutput {
     if (!this.db || !this.dbEnabled) {
@@ -901,7 +434,6 @@ ${ctx.codeChanges.modifiedFiles.join(", ") || "없음"}
 
   /**
    * 컨텍스트 상세 조회 (v2.0)
-   * ~500 토큰 응답
    */
   getContextById(input: ContextGetInput): ContextGetOutput | null {
     if (!this.db || !this.dbEnabled) {
@@ -912,7 +444,6 @@ ${ctx.codeChanges.modifiedFiles.join(", ") || "없음"}
 
   /**
    * 경고/추천 조회 (v2.0)
-   * ~100 토큰 응답
    */
   getWarnings(input: ContextWarnInput): ContextWarnOutput {
     if (!this.db || !this.dbEnabled) {
@@ -926,7 +457,7 @@ ${ctx.codeChanges.modifiedFiles.join(", ") || "없음"}
    */
   async addAction(
     contextId: string,
-    type: 'command' | 'edit' | 'error',
+    type: "command" | "edit" | "error",
     content: string,
     result?: string,
     filePath?: string
@@ -934,20 +465,24 @@ ${ctx.codeChanges.modifiedFiles.join(", ") || "없음"}
     if (!this.db || !this.dbEnabled) return;
 
     try {
-      this.db.prepare(`
+      this.db
+        .prepare(
+          `
         INSERT INTO actions (id, context_id, type, content, result, file_path, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        randomUUID(),
-        contextId,
-        type,
-        content,
-        result || null,
-        filePath || null,
-        new Date().toISOString()
-      );
+      `
+        )
+        .run(
+          randomUUID(),
+          contextId,
+          type,
+          content,
+          result || null,
+          filePath || null,
+          new Date().toISOString()
+        );
     } catch (err) {
-      console.error('액션 로그 저장 실패:', err);
+      console.error("액션 로그 저장 실패:", err);
     }
   }
 }
