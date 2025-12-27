@@ -92,6 +92,22 @@ export const ARCHIVE_LIMITS = {
 } as const;
 
 /**
+ * 스냅샷 관련 제한
+ */
+export const SNAPSHOT_LIMITS = {
+  DEFAULT_LIMIT: 10,
+  MAX_LIMIT: 50,
+} as const;
+
+/**
+ * 블로커 관련 제한
+ */
+export const BLOCKER_LIMITS = {
+  DEFAULT_LIMIT: 10,
+  MAX_LIMIT: 50,
+} as const;
+
+/**
  * 페이지네이션 관련
  */
 export const PAGINATION = {

@@ -1,12 +1,19 @@
 /**
- * MCP 도구 정의
+ * MCP 도구 정의 (v3.0)
  * 모든 도구의 스키마를 정의
+ *
+ * v3.0 변경사항:
+ * - 15개 → 10개 도구로 통합
+ * - snapshot_* → snapshot (action: create|restore|list)
+ * - blocker_* → blocker (action: add|resolve|list)
+ * - context_cleanup/archive → context_maintain (action: cleanup|archive)
+ * - context_stats/recommend → context_analyze (action: stats|recommend)
  */
 
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 
 /**
- * 기본 컨텍스트 관리 도구
+ * 기본 컨텍스트 관리 도구 (2개)
  */
 const contextTools: Tool[] = [
   {
@@ -43,121 +50,9 @@ const contextTools: Tool[] = [
 ];
 
 /**
- * 유지보수 도구 (v2.3)
- */
-const maintenanceTools: Tool[] = [
-  {
-    name: "context_cleanup",
-    description: "오래된 데이터 정리 (decisions, approaches, blockers, snapshots)",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        olderThan: {
-          type: "string",
-          description: "삭제 기준 (예: 30d, 7d, 2w, 1m)",
-          default: "30d",
-        },
-        removeResolvedBlockers: {
-          type: "boolean",
-          description: "해결된 블로커 삭제",
-          default: false,
-        },
-        keepOnlySuccessful: {
-          type: "boolean",
-          description: "성공한 시도만 유지",
-          default: false,
-        },
-        removeCompleted: {
-          type: "boolean",
-          description: "완료된 컨텍스트 삭제",
-          default: false,
-        },
-        dryRun: {
-          type: "boolean",
-          description: "미리보기 모드 (삭제하지 않음)",
-          default: true,
-        },
-      },
-    },
-  },
-  {
-    name: "context_archive",
-    description: "완료된 작업 아카이브",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        reason: {
-          type: "string",
-          description: "아카이브 사유",
-        },
-        contextIds: {
-          type: "array",
-          items: { type: "string" },
-          description: "특정 컨텍스트 ID들",
-        },
-        completedOnly: {
-          type: "boolean",
-          description: "완료된 컨텍스트만",
-          default: true,
-        },
-        deleteAfterArchive: {
-          type: "boolean",
-          description: "아카이브 후 원본 삭제",
-          default: false,
-        },
-      },
-    },
-  },
-  {
-    name: "snapshot_create",
-    description: "현재 컨텍스트 스냅샷 생성",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        reason: {
-          type: "string",
-          enum: ["manual", "milestone"],
-          default: "manual",
-        },
-        description: {
-          type: "string",
-          description: "스냅샷 설명",
-        },
-      },
-    },
-  },
-  {
-    name: "snapshot_restore",
-    description: "스냅샷에서 컨텍스트 복원",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        snapshotId: {
-          type: "string",
-          description: "복원할 스냅샷 ID",
-        },
-      },
-      required: ["snapshotId"],
-    },
-  },
-  {
-    name: "snapshot_list",
-    description: "저장된 스냅샷 목록 조회",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        limit: {
-          type: "number",
-          description: "조회 개수 제한",
-          default: 10,
-        },
-      },
-    },
-  },
-];
-
-/**
- * 메타데이터 관리 도구
+ * 메타데이터 관리 도구 (3개)
+ * - decision_log, attempt_log: 고빈도 도구 (유지)
+ * - handoff: 고유 기능 (유지)
  */
 const metadataTools: Tool[] = [
   {
@@ -186,29 +81,6 @@ const metadataTools: Tool[] = [
     },
   },
   {
-    name: "blocker_add",
-    description: "블로커 추가",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        description: { type: "string", description: "막힌 부분" },
-      },
-      required: ["description"],
-    },
-  },
-  {
-    name: "blocker_resolve",
-    description: "블로커 해결",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        blockerId: { type: "string" },
-        resolution: { type: "string", description: "해결 방법" },
-      },
-      required: ["blockerId", "resolution"],
-    },
-  },
-  {
     name: "handoff",
     description: "다른 AI로 인수인계",
     inputSchema: {
@@ -223,9 +95,10 @@ const metadataTools: Tool[] = [
 ];
 
 /**
- * 인텔리전스 도구 (v2.5)
+ * 인텔리전스 도구 (1개)
+ * - context_search: 고유 기능 (유지)
  */
-const intelligenceTools: Tool[] = [
+const searchTools: Tool[] = [
   {
     name: "context_search",
     description: "키워드, 태그, 상태로 과거 컨텍스트 검색",
@@ -267,27 +140,162 @@ const intelligenceTools: Tool[] = [
       },
     },
   },
+];
+
+/**
+ * 통합 도구 (4개) - v3.0
+ */
+const unifiedTools: Tool[] = [
+  // snapshot: create | restore | list
   {
-    name: "context_stats",
-    description: "작업 통계 조회 (성공률, 패턴 분석)",
+    name: "snapshot",
+    description: "스냅샷 관리 (생성/복원/목록)",
     inputSchema: {
       type: "object" as const,
       properties: {
+        action: {
+          type: "string",
+          enum: ["create", "restore", "list"],
+          description: "수행할 작업",
+        },
+        snapshotId: {
+          type: "string",
+          description: "복원할 스냅샷 ID (restore 시 필수)",
+        },
+        reason: {
+          type: "string",
+          enum: ["manual", "milestone"],
+          description: "스냅샷 이유 (create 시)",
+          default: "manual",
+        },
+        description: {
+          type: "string",
+          description: "스냅샷 설명 (create 시)",
+        },
+        limit: {
+          type: "number",
+          description: "목록 개수 (list 시)",
+          default: 10,
+        },
+      },
+      required: ["action"],
+    },
+  },
+  // blocker: add | resolve | list
+  {
+    name: "blocker",
+    description: "블로커 관리 (추가/해결/목록)",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        action: {
+          type: "string",
+          enum: ["add", "resolve", "list"],
+          description: "수행할 작업",
+        },
+        description: {
+          type: "string",
+          description: "블로커 설명 (add 시 필수)",
+        },
+        blockerId: {
+          type: "string",
+          description: "블로커 ID (resolve 시 필수)",
+        },
+        resolution: {
+          type: "string",
+          description: "해결 방법 (resolve 시 필수)",
+        },
+        includeResolved: {
+          type: "boolean",
+          description: "해결된 블로커 포함 (list 시)",
+          default: false,
+        },
+      },
+      required: ["action"],
+    },
+  },
+  // context_maintain: cleanup | archive
+  {
+    name: "context_maintain",
+    description: "컨텍스트 유지보수 (정리/아카이브)",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        action: {
+          type: "string",
+          enum: ["cleanup", "archive"],
+          description: "수행할 작업",
+        },
+        // cleanup 옵션
+        olderThan: {
+          type: "string",
+          description: "삭제 기준 (예: 30d, 7d, 2w, 1m)",
+          default: "30d",
+        },
+        dryRun: {
+          type: "boolean",
+          description: "미리보기 모드 (삭제하지 않음)",
+          default: true,
+        },
+        removeResolvedBlockers: {
+          type: "boolean",
+          description: "해결된 블로커 삭제",
+          default: false,
+        },
+        keepOnlySuccessful: {
+          type: "boolean",
+          description: "성공한 시도만 유지",
+          default: false,
+        },
+        removeCompleted: {
+          type: "boolean",
+          description: "완료된 컨텍스트 삭제",
+          default: false,
+        },
+        // archive 옵션
+        reason: {
+          type: "string",
+          description: "아카이브 사유",
+        },
+        contextIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "특정 컨텍스트 ID들",
+        },
+        completedOnly: {
+          type: "boolean",
+          description: "완료된 컨텍스트만",
+          default: true,
+        },
+        deleteAfterArchive: {
+          type: "boolean",
+          description: "아카이브 후 원본 삭제",
+          default: false,
+        },
+      },
+      required: ["action"],
+    },
+  },
+  // context_analyze: stats | recommend
+  {
+    name: "context_analyze",
+    description: "컨텍스트 분석 (통계/추천)",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        action: {
+          type: "string",
+          enum: ["stats", "recommend"],
+          description: "수행할 작업",
+        },
+        // stats 옵션
         range: {
           type: "string",
           enum: ["last_7_days", "last_30_days", "last_90_days", "all"],
           description: "조회 기간",
           default: "last_30_days",
         },
-      },
-    },
-  },
-  {
-    name: "context_recommend",
-    description: "현재 작업 기반 유사 해결책 추천",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
+        // recommend 옵션
         currentGoal: {
           type: "string",
           description: "현재 작업 목표 (미지정 시 현재 컨텍스트 사용)",
@@ -298,22 +306,25 @@ const intelligenceTools: Tool[] = [
           default: 5,
         },
       },
+      required: ["action"],
     },
   },
 ];
 
 /**
- * 모든 도구 정의 (15개)
+ * 모든 도구 정의 (10개)
+ *
+ * v3.0 구조:
  * - contextTools: 2개 (context_save, context_load)
- * - maintenanceTools: 5개 (context_cleanup, context_archive, snapshot_create, snapshot_restore, snapshot_list)
- * - metadataTools: 5개 (decision_log, attempt_log, blocker_add, blocker_resolve, handoff)
- * - intelligenceTools: 3개 (context_search, context_stats, context_recommend)
+ * - metadataTools: 3개 (decision_log, attempt_log, handoff)
+ * - searchTools: 1개 (context_search)
+ * - unifiedTools: 4개 (snapshot, blocker, context_maintain, context_analyze)
  */
 export const TOOLS: Tool[] = [
   ...contextTools,
-  ...maintenanceTools,
   ...metadataTools,
-  ...intelligenceTools,
+  ...searchTools,
+  ...unifiedTools,
 ];
 
 /**

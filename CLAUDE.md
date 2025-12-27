@@ -21,51 +21,95 @@ packages/
 
 ---
 
-## Context Sync MCP (`@liruns/context-sync-mcp` v2.5.0)
+## Context Sync MCP (`@liruns/context-sync-mcp` v3.0.0)
 
 여러 AI 에디터(Claude Code, Cursor, Windsurf, Copilot) 간 작업 컨텍스트 공유
 
-### 도구 (15개)
+> v3.0에서 15개 → 10개로 도구 통합 (AI 혼동 감소)
+
+### 도구 (10개)
 
 #### 컨텍스트 관리 (2개)
-| 도구 | 설명 |
-|------|------|
-| `context_save` | 작업 컨텍스트 저장 |
-| `context_load` | 이전 컨텍스트 로드 |
+| 도구 | 설명 | 파라미터 |
+|------|------|----------|
+| `context_save` | 작업 컨텍스트 저장 | `goal` (필수), `status`, `nextSteps`, `agent` |
+| `context_load` | 이전 컨텍스트 로드 | `format`: full/summary/decisions/blockers/next_steps |
 
-#### 기록 및 추적 (5개)
-| 도구 | 설명 |
-|------|------|
-| `decision_log` | 의사결정 기록 |
-| `attempt_log` | 시도/실패 기록 |
-| `blocker_add` | 블로커 추가 |
-| `blocker_resolve` | 블로커 해결 |
-| `handoff` | 다른 AI로 인수인계 |
+#### 기록 및 추적 (3개)
+| 도구 | 설명 | 파라미터 |
+|------|------|----------|
+| `decision_log` | 의사결정 기록 | `what` (필수), `why` (필수) |
+| `attempt_log` | 시도/실패 기록 | `approach` (필수), `result`: success/failed/partial, `reason` |
+| `handoff` | 다른 AI로 인수인계 | `to`: claude-code/cursor/windsurf/copilot, `summary` |
 
-#### 유지보수 (5개) - v2.3
-| 도구 | 설명 |
-|------|------|
-| `context_cleanup` | 오래된 데이터 정리 |
-| `context_archive` | 완료된 작업 아카이브 |
-| `snapshot_create` | 컨텍스트 스냅샷 생성 |
-| `snapshot_restore` | 스냅샷 복원 |
-| `snapshot_list` | 스냅샷 목록 조회 |
+#### 통합 도구 (4개) - v3.0 신규
+| 도구 | action | 설명 |
+|------|--------|------|
+| `snapshot` | `create`/`restore`/`list` | 스냅샷 생성/복원/목록 |
+| `blocker` | `add`/`resolve`/`list` | 블로커 추가/해결/목록 |
+| `context_maintain` | `cleanup`/`archive` | 정리/아카이브 |
+| `context_analyze` | `stats`/`recommend` | 통계/추천 |
 
-#### 인텔리전스 (3개) - v2.5 신규
-| 도구 | 설명 |
-|------|------|
-| `context_search` | 키워드/태그로 과거 컨텍스트 검색 |
-| `context_stats` | 작업 통계 조회 (성공률, 패턴) |
-| `context_recommend` | 현재 작업 기반 유사 해결책 추천 |
+#### 인텔리전스 (1개)
+| 도구 | 설명 | 파라미터 |
+|------|------|----------|
+| `context_search` | 과거 컨텍스트 검색 (FTS5) | `query`, `tags`, `status`, `agent`, `dateRange`, `scope` |
 
-### v2.5 주요 기능
-- **동기화 큐**: 동시 이벤트 순차 처리
-- **Vector Clock**: 분산 시스템 인과관계 추적
-- **파일 락**: 동시 접근 방지
+### 워크플로우 예시
+
+```
+# 1. 작업 시작 - 목표 저장
+> context_save goal: "사용자 인증 구현" status: "coding"
+
+# 2. 결정 기록
+> decision_log what: "JWT 사용" why: "stateless하고 확장성 좋음"
+
+# 3. 실패한 시도 기록 (다른 AI가 같은 실수 반복 방지)
+> attempt_log approach: "세션 기반 인증" result: "failed" reason: "Redis 설정 복잡"
+
+# 4. 블로커 기록 (v3.0 통합 도구)
+> blocker action: "add" description: "CORS 이슈로 API 호출 차단됨"
+
+# 5. 다른 AI로 인수인계
+> handoff to: "cursor" summary: "로그인 UI 구현 필요"
+
+# 6. 다른 AI에서 작업 재개
+> context_load format: "summary"
+```
+
+### 저장 위치
+```
+.context-sync/
+├── config.json      # 설정
+├── context.db       # SQLite DB (히스토리, FTS5 검색)
+├── archives/        # 아카이브된 컨텍스트
+└── snapshots/       # 스냅샷들
+```
+
+### v3.0 주요 변경
+- **도구 통합**: 15개 → 10개 (AI 도구 선택 혼동 감소)
+- **action 파라미터**: 유사 도구를 하나로 통합
+- **blocker list**: 블로커 목록 조회 기능 추가
 
 ### 설치
 ```bash
+# NPM으로 설치
+npm install @liruns/context-sync-mcp
+
+# 또는 로컬 빌드
 cd packages/context-sync-mcp && npm install && npm run build
+```
+
+### MCP 설정
+```json
+{
+  "mcpServers": {
+    "context-sync": {
+      "command": "npx",
+      "args": ["@liruns/context-sync-mcp"]
+    }
+  }
+}
 ```
 
 ---

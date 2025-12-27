@@ -727,3 +727,90 @@ export interface SnapshotListOutput {
   /** 전체 개수 */
   total: number;
 }
+
+// ========================================
+// v3.0 - 통합 도구 타입
+// ========================================
+
+import type {
+  ValidSnapshotAction,
+  ValidBlockerAction,
+  ValidMaintainAction,
+  ValidAnalyzeAction,
+} from "../constants/valid-values.js";
+
+/**
+ * snapshot 통합 도구 입력
+ */
+export interface SnapshotInput {
+  /** 수행할 작업 */
+  action: ValidSnapshotAction;
+  /** 복원할 스냅샷 ID (restore 시 필수) */
+  snapshotId?: string;
+  /** 스냅샷 이유 (create 시) */
+  reason?: "manual" | "milestone";
+  /** 스냅샷 설명 (create 시) */
+  description?: string;
+  /** 목록 개수 (list 시) */
+  limit?: number;
+}
+
+/**
+ * blocker 통합 도구 입력
+ */
+export interface BlockerInput {
+  /** 수행할 작업 */
+  action: ValidBlockerAction;
+  /** 블로커 설명 (add 시 필수) */
+  description?: string;
+  /** 블로커 ID (resolve 시 필수) */
+  blockerId?: string;
+  /** 해결 방법 (resolve 시 필수) */
+  resolution?: string;
+  /** 해결된 블로커 포함 (list 시) */
+  includeResolved?: boolean;
+}
+
+/**
+ * context_maintain 통합 도구 입력
+ */
+export interface MaintainInput {
+  /** 수행할 작업 */
+  action: ValidMaintainAction;
+  // cleanup 옵션
+  /** 삭제할 데이터 기간 */
+  olderThan?: string;
+  /** 미리보기 모드 */
+  dryRun?: boolean;
+  /** 해결된 블로커 삭제 */
+  removeResolvedBlockers?: boolean;
+  /** 성공한 시도만 유지 */
+  keepOnlySuccessful?: boolean;
+  /** 완료된 세션 삭제 */
+  removeCompleted?: boolean;
+  // archive 옵션
+  /** 아카이브 이유 */
+  reason?: string;
+  /** 아카이브할 컨텍스트 ID 목록 */
+  contextIds?: string[];
+  /** 완료된 세션만 아카이브 */
+  completedOnly?: boolean;
+  /** 아카이브 후 원본 삭제 */
+  deleteAfterArchive?: boolean;
+}
+
+/**
+ * context_analyze 통합 도구 입력
+ */
+export interface AnalyzeInput {
+  /** 수행할 작업 */
+  action: ValidAnalyzeAction;
+  // stats 옵션
+  /** 통계 기간 */
+  range?: "last_7_days" | "last_30_days" | "last_90_days" | "all";
+  // recommend 옵션
+  /** 현재 작업 목표 */
+  currentGoal?: string;
+  /** 추천 개수 */
+  limit?: number;
+}

@@ -19,12 +19,18 @@ import {
   VALID_QUERY_TYPES,
   VALID_COMPRESSION_LEVELS,
   VALID_SNAPSHOT_REASONS,
+  // v3.0 통합 도구 액션
+  VALID_SNAPSHOT_ACTIONS,
+  VALID_BLOCKER_ACTIONS,
+  VALID_MAINTAIN_ACTIONS,
+  VALID_ANALYZE_ACTIONS,
 } from "../constants/valid-values.js";
 import {
   ACTION_LIMITS,
   SEARCH_LIMITS,
   WARN_LIMITS,
   RECOMMEND_LIMITS,
+  SNAPSHOT_LIMITS,
   clampLimit,
 } from "../constants/limits.js";
 import {
@@ -509,5 +515,201 @@ export function validateSummarizeInput(args: unknown): SummarizeInput {
     )
       ? (parsed.compressionLevel as SummarizeInput["compressionLevel"])
       : "medium",
+  };
+}
+
+// ========================================
+// v3.0 - 통합 도구 검증 함수
+// ========================================
+
+import type {
+  SnapshotInput as UnifiedSnapshotInput,
+  BlockerInput as UnifiedBlockerInput,
+  MaintainInput,
+  AnalyzeInput,
+} from "../types/context.js";
+
+/**
+ * snapshot 통합 도구 검증
+ */
+export function validateUnifiedSnapshotInput(
+  args: unknown
+): { valid: true; input: UnifiedSnapshotInput } | { valid: false; error: string } {
+  const parsed = parseArgs(args);
+
+  // action 필수
+  if (!parsed.action || !isNonEmptyString(parsed.action)) {
+    return { valid: false, error: "action이 필요합니다 (create, restore, list)" };
+  }
+
+  // action 유효성
+  if (!VALID_SNAPSHOT_ACTIONS.includes(parsed.action as typeof VALID_SNAPSHOT_ACTIONS[number])) {
+    return {
+      valid: false,
+      error: `잘못된 action: ${parsed.action}. 사용 가능: ${VALID_SNAPSHOT_ACTIONS.join(", ")}`,
+    };
+  }
+
+  const action = parsed.action as UnifiedSnapshotInput["action"];
+
+  // restore 시 snapshotId 필수
+  if (action === "restore") {
+    if (!parsed.snapshotId || !isNonEmptyString(parsed.snapshotId)) {
+      return { valid: false, error: "restore 시 snapshotId가 필요합니다" };
+    }
+  }
+
+  return {
+    valid: true,
+    input: {
+      action,
+      snapshotId: isNonEmptyString(parsed.snapshotId) ? parsed.snapshotId : undefined,
+      reason: parsed.reason === "milestone" ? "milestone" : "manual",
+      description: isNonEmptyString(parsed.description) ? parsed.description : undefined,
+      limit: clampLimit(
+        isInteger(parsed.limit) ? parsed.limit : undefined,
+        SNAPSHOT_LIMITS.DEFAULT_LIMIT,
+        SNAPSHOT_LIMITS.MAX_LIMIT
+      ),
+    },
+  };
+}
+
+/**
+ * blocker 통합 도구 검증
+ */
+export function validateUnifiedBlockerInput(
+  args: unknown
+): { valid: true; input: UnifiedBlockerInput } | { valid: false; error: string } {
+  const parsed = parseArgs(args);
+
+  // action 필수
+  if (!parsed.action || !isNonEmptyString(parsed.action)) {
+    return { valid: false, error: "action이 필요합니다 (add, resolve, list)" };
+  }
+
+  // action 유효성
+  if (!VALID_BLOCKER_ACTIONS.includes(parsed.action as typeof VALID_BLOCKER_ACTIONS[number])) {
+    return {
+      valid: false,
+      error: `잘못된 action: ${parsed.action}. 사용 가능: ${VALID_BLOCKER_ACTIONS.join(", ")}`,
+    };
+  }
+
+  const action = parsed.action as UnifiedBlockerInput["action"];
+
+  // add 시 description 필수
+  if (action === "add") {
+    if (!parsed.description || !isNonEmptyString(parsed.description)) {
+      return { valid: false, error: "add 시 description이 필요합니다" };
+    }
+  }
+
+  // resolve 시 blockerId, resolution 필수
+  if (action === "resolve") {
+    if (!parsed.blockerId || !isNonEmptyString(parsed.blockerId)) {
+      return { valid: false, error: "resolve 시 blockerId가 필요합니다" };
+    }
+    if (!parsed.resolution || !isNonEmptyString(parsed.resolution)) {
+      return { valid: false, error: "resolve 시 resolution이 필요합니다" };
+    }
+  }
+
+  return {
+    valid: true,
+    input: {
+      action,
+      description: isNonEmptyString(parsed.description) ? parsed.description : undefined,
+      blockerId: isNonEmptyString(parsed.blockerId) ? parsed.blockerId : undefined,
+      resolution: isNonEmptyString(parsed.resolution) ? parsed.resolution : undefined,
+      includeResolved: isBoolean(parsed.includeResolved) ? parsed.includeResolved : false,
+    },
+  };
+}
+
+/**
+ * context_maintain 통합 도구 검증
+ */
+export function validateMaintainInput(
+  args: unknown
+): { valid: true; input: MaintainInput } | { valid: false; error: string } {
+  const parsed = parseArgs(args);
+
+  // action 필수
+  if (!parsed.action || !isNonEmptyString(parsed.action)) {
+    return { valid: false, error: "action이 필요합니다 (cleanup, archive)" };
+  }
+
+  // action 유효성
+  if (!VALID_MAINTAIN_ACTIONS.includes(parsed.action as typeof VALID_MAINTAIN_ACTIONS[number])) {
+    return {
+      valid: false,
+      error: `잘못된 action: ${parsed.action}. 사용 가능: ${VALID_MAINTAIN_ACTIONS.join(", ")}`,
+    };
+  }
+
+  const action = parsed.action as MaintainInput["action"];
+
+  return {
+    valid: true,
+    input: {
+      action,
+      // cleanup 옵션
+      olderThan: isNonEmptyString(parsed.olderThan) ? parsed.olderThan : "30d",
+      dryRun: isBoolean(parsed.dryRun) ? parsed.dryRun : true,
+      removeResolvedBlockers: isBoolean(parsed.removeResolvedBlockers) ? parsed.removeResolvedBlockers : false,
+      keepOnlySuccessful: isBoolean(parsed.keepOnlySuccessful) ? parsed.keepOnlySuccessful : false,
+      removeCompleted: isBoolean(parsed.removeCompleted) ? parsed.removeCompleted : false,
+      // archive 옵션
+      reason: isNonEmptyString(parsed.reason) ? parsed.reason : undefined,
+      contextIds: isArray(parsed.contextIds)
+        ? parsed.contextIds.filter((id) => isNonEmptyString(id)) as string[]
+        : undefined,
+      completedOnly: isBoolean(parsed.completedOnly) ? parsed.completedOnly : true,
+      deleteAfterArchive: isBoolean(parsed.deleteAfterArchive) ? parsed.deleteAfterArchive : false,
+    },
+  };
+}
+
+/**
+ * context_analyze 통합 도구 검증
+ */
+export function validateAnalyzeInput(
+  args: unknown
+): { valid: true; input: AnalyzeInput } | { valid: false; error: string } {
+  const parsed = parseArgs(args);
+
+  // action 필수
+  if (!parsed.action || !isNonEmptyString(parsed.action)) {
+    return { valid: false, error: "action이 필요합니다 (stats, recommend)" };
+  }
+
+  // action 유효성
+  if (!VALID_ANALYZE_ACTIONS.includes(parsed.action as typeof VALID_ANALYZE_ACTIONS[number])) {
+    return {
+      valid: false,
+      error: `잘못된 action: ${parsed.action}. 사용 가능: ${VALID_ANALYZE_ACTIONS.join(", ")}`,
+    };
+  }
+
+  const action = parsed.action as AnalyzeInput["action"];
+
+  // recommend 시 currentGoal 확인 (선택적 - 현재 컨텍스트에서 가져올 수 있음)
+  const validRanges = ["last_7_days", "last_30_days", "last_90_days", "all"] as const;
+
+  return {
+    valid: true,
+    input: {
+      action,
+      range: validRanges.includes(parsed.range as typeof validRanges[number])
+        ? (parsed.range as AnalyzeInput["range"])
+        : "last_30_days",
+      currentGoal: isNonEmptyString(parsed.currentGoal) ? parsed.currentGoal : undefined,
+      limit: clampLimit(
+        isInteger(parsed.limit) ? parsed.limit : undefined,
+        RECOMMEND_LIMITS.DEFAULT_LIMIT,
+        RECOMMEND_LIMITS.MAX_LIMIT
+      ),
+    },
   };
 }

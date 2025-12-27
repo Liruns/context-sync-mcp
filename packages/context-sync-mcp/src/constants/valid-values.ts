@@ -124,6 +124,38 @@ export const VALID_ACTION_TYPES = ["command", "edit", "error"] as const;
 
 export type ValidActionType = (typeof VALID_ACTION_TYPES)[number];
 
+// ========================================
+// v3.0 - 통합 도구 액션 타입
+// ========================================
+
+/**
+ * snapshot 도구 액션
+ */
+export const VALID_SNAPSHOT_ACTIONS = ["create", "restore", "list"] as const;
+
+export type ValidSnapshotAction = (typeof VALID_SNAPSHOT_ACTIONS)[number];
+
+/**
+ * blocker 도구 액션
+ */
+export const VALID_BLOCKER_ACTIONS = ["add", "resolve", "list"] as const;
+
+export type ValidBlockerAction = (typeof VALID_BLOCKER_ACTIONS)[number];
+
+/**
+ * context_maintain 도구 액션
+ */
+export const VALID_MAINTAIN_ACTIONS = ["cleanup", "archive"] as const;
+
+export type ValidMaintainAction = (typeof VALID_MAINTAIN_ACTIONS)[number];
+
+/**
+ * context_analyze 도구 액션
+ */
+export const VALID_ANALYZE_ACTIONS = ["stats", "recommend"] as const;
+
+export type ValidAnalyzeAction = (typeof VALID_ANALYZE_ACTIONS)[number];
+
 /**
  * 유효값 검사 헬퍼
  */
