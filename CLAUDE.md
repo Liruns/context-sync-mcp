@@ -21,78 +21,21 @@ packages/
 
 ---
 
-## Context Sync MCP (`@liruns/context-sync-mcp` v0.2.0)
+## Context Sync MCP (`@liruns/context-sync-mcp` v2.2.0)
 
 여러 AI 에디터(Claude Code, Cursor, Windsurf, Copilot) 간 작업 컨텍스트 공유
 
-### 자연어로 사용하기
+### 도구 (7개)
 
-도구 이름 대신 자연어로 간편하게 사용 가능:
-
-```
-"저장해줘" → 컨텍스트 저장
-"불러와" / "이전 작업" → 컨텍스트 로드
-"어디까지 했어" / "상태" → 현재 상태 조회
-"요약해줘" → 컨텍스트 요약
-"자동저장 켜줘" → 자동 동기화 시작
-"자동저장 꺼줘" → 자동 동기화 중지
-```
-
-### 자동화 설정
-
-`.context-sync/config.json`에서 설정 가능:
-
-```json
-{
-  "automation": {
-    "autoLoad": true,   // 세션 시작 시 자동 로드
-    "autoSave": true,   // 변경 시 자동 저장
-    "autoSync": false   // 자동 동기화 시작
-  }
-}
-```
-
-- `session_start` 도구: 세션 시작 시 자동 로드 + 요약 반환
-- `automation_config` 도구: 자동화 설정 조회/변경
-
-### 도구 (17개)
-
-**자연어 & 자동화 (신규)**
-| 도구 | 설명 |
-|------|------|
-| `ctx` | 자연어 명령 (저장/로드/상태/요약) |
-| `session_start` | 세션 시작 (자동 로드 지원) |
-| `automation_config` | 자동화 설정 관리 |
-
-**컨텍스트 관리**
 | 도구 | 설명 |
 |------|------|
 | `context_save` | 작업 컨텍스트 저장 |
 | `context_load` | 이전 컨텍스트 로드 |
-| `context_query` | 특정 정보 조회 |
-| `context_summarize` | 컨텍스트 요약 (토큰 절약) |
-
-**기록 및 추적**
-| 도구 | 설명 |
-|------|------|
 | `decision_log` | 의사결정 기록 |
 | `attempt_log` | 시도/실패 기록 |
 | `blocker_add` | 블로커 추가 |
 | `blocker_resolve` | 블로커 해결 |
 | `handoff` | 다른 AI로 인수인계 |
-
-**스냅샷**
-| 도구 | 설명 |
-|------|------|
-| `snapshot_create` | 스냅샷 생성 |
-| `snapshot_list` | 스냅샷 목록 |
-
-**자동 동기화**
-| 도구 | 설명 |
-|------|------|
-| `sync_start` | 자동 동기화 시작 (에디터 전환, 파일 저장, Git 커밋 감지) |
-| `sync_stop` | 자동 동기화 중지 |
-| `sync_status` | 동기화 상태 조회 |
 
 ### 설치
 ```bash

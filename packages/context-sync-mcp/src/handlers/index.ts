@@ -6,11 +6,6 @@
 import type { HandlerFn, HandlerContext, ToolResponse } from "./types.js";
 import { contextHandlers } from "./context-handlers.js";
 import { metadataHandlers } from "./metadata-handlers.js";
-import { snapshotHandlers } from "./snapshot-handlers.js";
-import { syncHandlers } from "./sync-handlers.js";
-import { nlpHandlers } from "./nlp-handlers.js";
-import { advancedHandlers } from "./advanced-handlers.js";
-import { v2Handlers } from "./v2-handlers.js";
 
 export type { HandlerFn, HandlerContext, ToolResponse };
 export { successResponse, errorResponse, requireDatabase } from "./types.js";
@@ -20,15 +15,10 @@ export { successResponse, errorResponse, requireDatabase } from "./types.js";
  */
 const handlers = new Map<string, HandlerFn>();
 
-// 각 모듈의 핸들러 등록
+// 각 모듈의 핸들러 등록 (7개 도구)
 const modules = [
   contextHandlers,
   metadataHandlers,
-  snapshotHandlers,
-  syncHandlers,
-  nlpHandlers,
-  advancedHandlers,
-  v2Handlers,
 ];
 
 for (const module of modules) {
@@ -101,8 +91,3 @@ export class HandlerRegistry {
 // 개별 핸들러 모듈 내보내기
 export { contextHandlers } from "./context-handlers.js";
 export { metadataHandlers } from "./metadata-handlers.js";
-export { snapshotHandlers } from "./snapshot-handlers.js";
-export { syncHandlers } from "./sync-handlers.js";
-export { nlpHandlers } from "./nlp-handlers.js";
-export { advancedHandlers } from "./advanced-handlers.js";
-export { v2Handlers } from "./v2-handlers.js";
