@@ -4,7 +4,7 @@
  */
 
 import type { DatabaseInstance } from '../db/index.js';
-import { buildFtsQuery, hasFts5Support } from '../db/index.js';
+import { createQueryBuilder, extractKeywords } from '../db/query-builder.js';
 import type {
   ContextRecommendInput,
   ContextRecommendOutput,
@@ -33,18 +33,6 @@ export function validateRecommendInput(input: unknown): ContextRecommendInput {
         ? Math.min(Math.max(1, parsed.limit), MAX_LIMIT)
         : DEFAULT_LIMIT,
   };
-}
-
-/**
- * 키워드 추출 (간단한 토크나이저)
- */
-function extractKeywords(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replace(/[^\w\sㄱ-ㅎㅏ-ㅣ가-힣]/g, ' ')
-    .split(/\s+/)
-    .filter((word) => word.length >= 2)
-    .slice(0, 10); // 최대 10개
 }
 
 /**
@@ -142,10 +130,14 @@ export function recommendContexts(
 ): ContextRecommendOutput {
   const limit = input.limit || DEFAULT_LIMIT;
 
-  // FTS5 지원 여부 확인
-  const useFts = hasFts5Support(db);
+  // QueryBuilder를 사용하여 쿼리 생성
+  const queryBuilder = createQueryBuilder(db);
+  const { sql, params } = queryBuilder.buildRecommendQuery({
+    query: input.currentGoal,
+    limit: SEARCH_LIMIT,
+  });
 
-  let candidates: Array<{
+  const candidates = db.prepare(sql).all(...params) as Array<{
     id: string;
     goal: string;
     goal_short: string | null;
@@ -156,66 +148,6 @@ export function recommendContexts(
     has_warnings: number;
     created_at: string;
   }>;
-
-  if (useFts) {
-    // FTS5 전문검색
-    const ftsQuery = buildFtsQuery(input.currentGoal);
-    candidates = db
-      .prepare(
-        `
-        SELECT c.id, c.goal, c.goal_short, c.summary_short, c.status,
-               c.tags, c.metadata, c.has_warnings, c.created_at
-        FROM contexts c
-        JOIN contexts_fts fts ON c.id = fts.id
-        WHERE contexts_fts MATCH ?
-        ORDER BY rank
-        LIMIT ?
-      `
-      )
-      .all(ftsQuery, SEARCH_LIMIT) as typeof candidates;
-  } else {
-    // FTS5 미지원: LIKE 검색으로 fallback
-    const keywords = extractKeywords(input.currentGoal);
-    if (keywords.length === 0) {
-      // 키워드가 없으면 최신 컨텍스트 반환
-      candidates = db
-        .prepare(
-          `
-          SELECT id, goal, goal_short, summary_short, status,
-                 tags, metadata, has_warnings, created_at
-          FROM contexts
-          ORDER BY created_at DESC
-          LIMIT ?
-        `
-        )
-        .all(SEARCH_LIMIT) as typeof candidates;
-    } else {
-      // 키워드 기반 LIKE 검색
-      const likeConditions = keywords
-        .slice(0, 5) // 최대 5개 키워드만 사용
-        .map(() => '(goal LIKE ? OR summary LIKE ? OR tags LIKE ?)')
-        .join(' OR ');
-      const likeParams: string[] = [];
-      for (const kw of keywords.slice(0, 5)) {
-        const pattern = `%${kw}%`;
-        likeParams.push(pattern, pattern, pattern);
-      }
-      likeParams.push(String(SEARCH_LIMIT));
-
-      candidates = db
-        .prepare(
-          `
-          SELECT id, goal, goal_short, summary_short, status,
-                 tags, metadata, has_warnings, created_at
-          FROM contexts
-          WHERE ${likeConditions}
-          ORDER BY created_at DESC
-          LIMIT ?
-        `
-        )
-        .all(...likeParams) as typeof candidates;
-    }
-  }
 
   // 관련성 점수 계산 및 정렬
   const scored = candidates.map((ctx) => {

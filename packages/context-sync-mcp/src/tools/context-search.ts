@@ -6,7 +6,7 @@
  */
 
 import type { DatabaseInstance } from '../db/index.js';
-import { buildFtsQuery, hasFts5Support } from '../db/index.js';
+import { createQueryBuilder } from '../db/query-builder.js';
 import { searchGlobalContexts } from '../db/global-db.js';
 import { formatDateShort } from '../utils/truncate.js';
 import type {
@@ -74,112 +74,27 @@ export function searchContexts(
   const limit = clampLimit(input.limit, SEARCH_LIMITS.DEFAULT_LIMIT, SEARCH_LIMITS.MAX_LIMIT);
   const offset = input.offset || 0;
 
-  let query: string;
-  let params: unknown[] = [];
-  let countQuery: string;
-  let countParams: unknown[] = [];
-
-  // FTS5 지원 여부 확인 (쿼리가 있을 때만 필요)
-  const useFts = input.query ? hasFts5Support(db) : false;
-
-  if (input.query) {
-
-    if (useFts) {
-      // FTS5 전문검색
-      const ftsQuery = buildFtsQuery(input.query);
-      query = `
-        SELECT c.id, c.goal_short, c.created_at, c.has_warnings
-        FROM contexts c
-        JOIN contexts_fts fts ON c.id = fts.id
-        WHERE contexts_fts MATCH ?
-      `;
-      countQuery = `
-        SELECT COUNT(*) as count
-        FROM contexts c
-        JOIN contexts_fts fts ON c.id = fts.id
-        WHERE contexts_fts MATCH ?
-      `;
-      params = [ftsQuery];
-      countParams = [ftsQuery];
-    } else {
-      // FTS5 미지원: LIKE 검색으로 fallback
-      const likePattern = `%${input.query}%`;
-      query = `
-        SELECT id, goal_short, created_at, has_warnings
-        FROM contexts
-        WHERE (goal LIKE ? OR summary LIKE ? OR tags LIKE ?)
-      `;
-      countQuery = `
-        SELECT COUNT(*) as count
-        FROM contexts
-        WHERE (goal LIKE ? OR summary LIKE ? OR tags LIKE ?)
-      `;
-      params = [likePattern, likePattern, likePattern];
-      countParams = [likePattern, likePattern, likePattern];
-    }
-  } else {
-    // 기본 쿼리
-    query = `
-      SELECT id, goal_short, created_at, has_warnings
-      FROM contexts
-      WHERE 1=1
-    `;
-    countQuery = `SELECT COUNT(*) as count FROM contexts WHERE 1=1`;
-  }
-
-  // 필터 추가
-  if (input.status) {
-    query += ` AND status = ?`;
-    countQuery += ` AND status = ?`;
-    params.push(input.status);
-    countParams.push(input.status);
-  }
-
-  if (input.agent) {
-    query += ` AND agent = ?`;
-    countQuery += ` AND agent = ?`;
-    params.push(input.agent);
-    countParams.push(input.agent);
-  }
-
-  if (input.tags && input.tags.length > 0) {
-    // v2.2: context_tags 테이블 사용 (인덱스 활용, JSON LIKE 대비 10x+ 빠름)
-    const placeholders = input.tags.map(() => '?').join(', ');
-    // FTS5 사용 시 c.id, 그 외에는 id 참조
-    const idRef = useFts ? 'c.id' : 'id';
-    query += ` AND ${idRef} IN (SELECT context_id FROM context_tags WHERE tag IN (${placeholders}))`;
-    countQuery += ` AND ${idRef} IN (SELECT context_id FROM context_tags WHERE tag IN (${placeholders}))`;
-    params.push(...input.tags);
-    countParams.push(...input.tags);
-  }
-
-  if (input.dateRange?.from) {
-    query += ` AND created_at >= ?`;
-    countQuery += ` AND created_at >= ?`;
-    params.push(input.dateRange.from);
-    countParams.push(input.dateRange.from);
-  }
-
-  if (input.dateRange?.to) {
-    query += ` AND created_at <= ?`;
-    countQuery += ` AND created_at <= ?`;
-    params.push(input.dateRange.to);
-    countParams.push(input.dateRange.to);
-  }
-
-  // 정렬 및 페이지네이션
-  query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
-  params.push(limit, offset);
+  // QueryBuilder를 사용하여 쿼리 생성
+  const queryBuilder = createQueryBuilder(db);
+  const { sql, countSql, params, countParams } = queryBuilder.buildSearchQuery({
+    query: input.query,
+    status: input.status,
+    agent: input.agent,
+    tags: input.tags,
+    dateRange: input.dateRange,
+    limit,
+    offset,
+  });
 
   // 실행
-  const rows = db.prepare(query).all(...params) as Array<{
+  const rows = db.prepare(sql).all(...params) as Array<{
     id: string;
     goal_short: string | null;
     created_at: string;
     has_warnings: number;
   }>;
 
-  const countResult = db.prepare(countQuery).get(...countParams) as { count: number };
+  const countResult = db.prepare(countSql).get(...countParams) as { count: number };
   const total = countResult.count;
 
   // 힌트로 변환

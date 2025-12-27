@@ -23,6 +23,10 @@ export class ContextRepository {
   private storePath: string;
   private currentContext: SharedContext | null = null;
 
+  // 지연 정리를 위한 필드
+  private lastTrimTime = 0;
+  private readonly TRIM_INTERVAL_MS = 5 * 60 * 1000; // 5분
+
   constructor(storePath: string) {
     this.storePath = storePath;
   }
@@ -167,13 +171,34 @@ export class ContextRepository {
       return;
     }
 
-    // 저장 전 자동 정리
-    this.trimContext();
+    // 지연 정리: 일정 시간이 지났거나 크기 임계값 초과 시에만 정리
+    const now = Date.now();
+    if (now - this.lastTrimTime > this.TRIM_INTERVAL_MS || this.needsTrim()) {
+      this.trimContext();
+      this.lastTrimTime = now;
+    }
 
     const contextPath = path.join(this.storePath, "current.json");
     await fs.writeFile(
       contextPath,
       JSON.stringify(this.currentContext, null, 2)
+    );
+  }
+
+  /**
+   * 정리가 필요한지 확인 (크기 임계값 체크)
+   */
+  private needsTrim(): boolean {
+    if (!this.currentContext) return false;
+
+    const summary = this.currentContext.conversationSummary;
+
+    // 임계값 초과 시 정리 필요
+    return (
+      summary.blockers.some((b) => b.resolved) ||
+      summary.keyDecisions.length > 15 ||
+      summary.triedApproaches.length > 10 ||
+      this.currentContext.agentChain.length > 5
     );
   }
 

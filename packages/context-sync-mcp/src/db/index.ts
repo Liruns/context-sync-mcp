@@ -86,8 +86,14 @@ class StatementWrapper {
     const results: unknown[] = [];
     const stmt = this.db.prepare(this.sql);
     stmt.bind(params as (string | number | null | Uint8Array)[]);
+
+    // 컬럼명은 한 번만 가져옴 (첫 row에서)
+    let columns: string[] | null = null;
+
     while (stmt.step()) {
-      const columns = stmt.getColumnNames();
+      if (!columns) {
+        columns = stmt.getColumnNames();
+      }
       const values = stmt.get();
       const row: Record<string, unknown> = {};
       columns.forEach((col: string, i: number) => {
@@ -379,6 +385,7 @@ function runMigrations(db: DatabaseInstance, fromVersion: number): void {
 
 /**
  * v2.2: 기존 JSON 태그를 context_tags 테이블로 마이그레이션
+ * 배치 처리로 성능 최적화
  */
 function migrateTagsToJunctionTable(db: DatabaseInstance): void {
   console.log('[Context Sync] 태그 정규화 마이그레이션 시작...');
@@ -389,24 +396,31 @@ function migrateTagsToJunctionTable(db: DatabaseInstance): void {
       tags: string;
     }>;
 
-    let migratedCount = 0;
+    // 트랜잭션으로 배치 처리
+    const migrateTransaction = db.transaction(() => {
+      let migratedCount = 0;
+      const insertStmt = db.prepare(
+        'INSERT OR IGNORE INTO context_tags (context_id, tag) VALUES (?, ?)'
+      );
 
-    for (const ctx of contexts) {
-      try {
-        const tags = JSON.parse(ctx.tags || '[]') as string[];
-        for (const tag of tags) {
-          if (tag && typeof tag === 'string') {
-            db.prepare(
-              'INSERT OR IGNORE INTO context_tags (context_id, tag) VALUES (?, ?)'
-            ).run(ctx.id, tag.trim());
-            migratedCount++;
+      for (const ctx of contexts) {
+        try {
+          const tags = JSON.parse(ctx.tags || '[]') as string[];
+          for (const tag of tags) {
+            if (tag && typeof tag === 'string') {
+              insertStmt.run(ctx.id, tag.trim());
+              migratedCount++;
+            }
           }
+        } catch {
+          // JSON 파싱 실패 무시
         }
-      } catch {
-        // JSON 파싱 실패 무시
       }
-    }
 
+      return migratedCount;
+    });
+
+    const migratedCount = migrateTransaction();
     console.log(`[Context Sync] 태그 마이그레이션 완료: ${migratedCount}개 태그`);
   } catch (err) {
     console.error('[Context Sync] 태그 마이그레이션 실패:', err);
@@ -536,12 +550,15 @@ export function syncContextTags(
   // 기존 태그 삭제
   db.prepare('DELETE FROM context_tags WHERE context_id = ?').run(contextId);
 
-  // 새 태그 삽입
+  // 새 태그 삽입 (빈 문자열 및 공백만 있는 태그 무시)
   for (const tag of tags) {
     if (tag && typeof tag === 'string') {
-      db.prepare(
-        'INSERT OR IGNORE INTO context_tags (context_id, tag) VALUES (?, ?)'
-      ).run(contextId, tag.trim());
+      const trimmed = tag.trim();
+      if (trimmed) {
+        db.prepare(
+          'INSERT OR IGNORE INTO context_tags (context_id, tag) VALUES (?, ?)'
+        ).run(contextId, trimmed);
+      }
     }
   }
 }

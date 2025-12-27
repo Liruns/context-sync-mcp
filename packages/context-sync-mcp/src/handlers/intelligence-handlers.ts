@@ -18,6 +18,7 @@ import {
   validateRecommendInput,
   formatRecommendMarkdown,
 } from "../tools/index.js";
+import { formatSearchMarkdown } from "../utils/formatters.js";
 
 /**
  * context_search 핸들러
@@ -29,28 +30,9 @@ export const handleContextSearch: HandlerFn = async (args, ctx) => {
     const db = requireDatabase(ctx);
 
     const result = await searchContextsWithScope(db, input);
+    const markdown = formatSearchMarkdown(result);
 
-    // 결과 포맷팅
-    if (result.hints.length === 0) {
-      return successResponse("검색 결과가 없습니다.");
-    }
-
-    let md = `🔍 **검색 결과** (${result.total}개 중 ${result.hints.length}개)\n\n`;
-
-    for (const hint of result.hints) {
-      const warningIcon = hint.hasWarnings ? "⚠️ " : "";
-      md += `- ${warningIcon}**${hint.goal}** (\`${hint.id.slice(0, 8)}\`) - ${hint.date}\n`;
-    }
-
-    if (result.hasMore) {
-      md += `\n> 더 많은 결과가 있습니다. offset을 조정하세요.`;
-    }
-
-    if (result.suggestion) {
-      md += `\n\n💡 ${result.suggestion}`;
-    }
-
-    return successResponse(md);
+    return successResponse(markdown);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return errorResponse(`검색 오류: ${message}`);
