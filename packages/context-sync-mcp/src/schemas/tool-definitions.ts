@@ -223,15 +223,97 @@ const metadataTools: Tool[] = [
 ];
 
 /**
- * 모든 도구 정의 (12개)
+ * 인텔리전스 도구 (v2.5)
+ */
+const intelligenceTools: Tool[] = [
+  {
+    name: "context_search",
+    description: "키워드, 태그, 상태로 과거 컨텍스트 검색",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        query: { type: "string", description: "검색 키워드" },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "태그 필터",
+        },
+        status: {
+          type: "string",
+          enum: ["planning", "coding", "testing", "reviewing", "debugging", "completed", "paused"],
+          description: "상태 필터",
+        },
+        agent: {
+          type: "string",
+          enum: ["claude-code", "cursor", "windsurf", "copilot", "unknown"],
+          description: "에이전트 필터",
+        },
+        dateRange: {
+          type: "object",
+          properties: {
+            from: { type: "string", description: "시작일 (ISO 형식)" },
+            to: { type: "string", description: "종료일 (ISO 형식)" },
+          },
+          description: "날짜 범위",
+        },
+        limit: { type: "number", description: "결과 개수 제한", default: 10 },
+        offset: { type: "number", description: "결과 오프셋", default: 0 },
+        scope: {
+          type: "string",
+          enum: ["project", "global"],
+          description: "검색 범위",
+          default: "project",
+        },
+      },
+    },
+  },
+  {
+    name: "context_stats",
+    description: "작업 통계 조회 (성공률, 패턴 분석)",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        range: {
+          type: "string",
+          enum: ["last_7_days", "last_30_days", "last_90_days", "all"],
+          description: "조회 기간",
+          default: "last_30_days",
+        },
+      },
+    },
+  },
+  {
+    name: "context_recommend",
+    description: "현재 작업 기반 유사 해결책 추천",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        currentGoal: {
+          type: "string",
+          description: "현재 작업 목표 (미지정 시 현재 컨텍스트 사용)",
+        },
+        limit: {
+          type: "number",
+          description: "추천 개수",
+          default: 5,
+        },
+      },
+    },
+  },
+];
+
+/**
+ * 모든 도구 정의 (15개)
  * - contextTools: 2개 (context_save, context_load)
  * - maintenanceTools: 5개 (context_cleanup, context_archive, snapshot_create, snapshot_restore, snapshot_list)
  * - metadataTools: 5개 (decision_log, attempt_log, blocker_add, blocker_resolve, handoff)
+ * - intelligenceTools: 3개 (context_search, context_stats, context_recommend)
  */
 export const TOOLS: Tool[] = [
   ...contextTools,
   ...maintenanceTools,
   ...metadataTools,
+  ...intelligenceTools,
 ];
 
 /**

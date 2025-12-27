@@ -21,11 +21,11 @@ packages/
 
 ---
 
-## Context Sync MCP (`@liruns/context-sync-mcp` v2.3.0)
+## Context Sync MCP (`@liruns/context-sync-mcp` v2.5.0)
 
 여러 AI 에디터(Claude Code, Cursor, Windsurf, Copilot) 간 작업 컨텍스트 공유
 
-### 도구 (12개)
+### 도구 (15개)
 
 #### 컨텍스트 관리 (2개)
 | 도구 | 설명 |
@@ -42,7 +42,7 @@ packages/
 | `blocker_resolve` | 블로커 해결 |
 | `handoff` | 다른 AI로 인수인계 |
 
-#### 유지보수 (5개) - v2.3 신규
+#### 유지보수 (5개) - v2.3
 | 도구 | 설명 |
 |------|------|
 | `context_cleanup` | 오래된 데이터 정리 |
@@ -50,6 +50,18 @@ packages/
 | `snapshot_create` | 컨텍스트 스냅샷 생성 |
 | `snapshot_restore` | 스냅샷 복원 |
 | `snapshot_list` | 스냅샷 목록 조회 |
+
+#### 인텔리전스 (3개) - v2.5 신규
+| 도구 | 설명 |
+|------|------|
+| `context_search` | 키워드/태그로 과거 컨텍스트 검색 |
+| `context_stats` | 작업 통계 조회 (성공률, 패턴) |
+| `context_recommend` | 현재 작업 기반 유사 해결책 추천 |
+
+### v2.5 주요 기능
+- **동기화 큐**: 동시 이벤트 순차 처리
+- **Vector Clock**: 분산 시스템 인과관계 추적
+- **파일 락**: 동시 접근 방지
 
 ### 설치
 ```bash

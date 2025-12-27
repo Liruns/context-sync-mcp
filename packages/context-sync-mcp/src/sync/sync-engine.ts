@@ -10,6 +10,7 @@ import { promisify } from "util";
 import { ContextStore } from "../store/index.js";
 import { EditorWatcher } from "../watcher/index.js";
 import type { EditorSwitchEvent } from "../watcher/index.js";
+import { SyncQueue } from "./sync-queue.js";
 
 const execAsync = promisify(exec);
 
@@ -95,6 +96,8 @@ export class SyncEngine extends EventEmitter {
   // 파일 감시 관련 (메모리 누수 방지를 위해 클래스 필드로 관리)
   private fileDebounceTimer: NodeJS.Timeout | null = null;
   private changedFiles: Set<string> = new Set();
+  // v2.5: 동기화 큐 (동시성 제어)
+  private syncQueue: SyncQueue;
 
   constructor(
     store: ContextStore,
@@ -105,6 +108,11 @@ export class SyncEngine extends EventEmitter {
     this.store = store;
     this.projectPath = projectPath;
     this.config = { ...DEFAULT_CONFIG, ...config };
+
+    // v2.5: 동기화 큐 초기화
+    this.syncQueue = new SyncQueue();
+    this.syncQueue.setProcessor((event) => this.processSync(event));
+    this.syncQueue.on("error", (err) => this.emit("error", err));
   }
 
   /**
@@ -370,9 +378,16 @@ export class SyncEngine extends EventEmitter {
   }
 
   /**
-   * 동기화 처리
+   * 동기화 처리 (v2.5: 큐를 통해 순차 처리)
    */
   private async onSync(event: SyncEvent): Promise<void> {
+    await this.syncQueue.enqueue(event);
+  }
+
+  /**
+   * 실제 동기화 로직 (v2.5: 큐에서 호출)
+   */
+  private async processSync(event: SyncEvent): Promise<void> {
     try {
       // 스냅샷 생성
       const reason = event.type === "manual" ? "manual" : "auto";
@@ -391,7 +406,15 @@ export class SyncEngine extends EventEmitter {
       this.emit("sync", event);
     } catch (err) {
       this.emit("error", { source: "sync", error: err, event });
+      throw err; // 큐에서 에러 처리할 수 있도록
     }
+  }
+
+  /**
+   * 큐 상태 조회 (v2.5)
+   */
+  getQueueStatus() {
+    return this.syncQueue.getStatus();
   }
 }
 
