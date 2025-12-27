@@ -167,11 +167,45 @@ export class ContextRepository {
       return;
     }
 
+    // 저장 전 자동 정리
+    this.trimContext();
+
     const contextPath = path.join(this.storePath, "current.json");
     await fs.writeFile(
       contextPath,
       JSON.stringify(this.currentContext, null, 2)
     );
+  }
+
+  /**
+   * 컨텍스트 자동 정리 (크기 제한)
+   * - resolved blockers 제거
+   * - decisions: 최근 15개
+   * - approaches: 최근 10개
+   * - agentChain: 최근 5개
+   */
+  private trimContext(): void {
+    if (!this.currentContext) return;
+
+    const summary = this.currentContext.conversationSummary;
+
+    // 1. resolved blockers 제거
+    summary.blockers = summary.blockers.filter((b) => !b.resolved);
+
+    // 2. decisions: 최근 15개만 유지
+    if (summary.keyDecisions.length > 15) {
+      summary.keyDecisions = summary.keyDecisions.slice(-15);
+    }
+
+    // 3. approaches: 최근 10개만 유지
+    if (summary.triedApproaches.length > 10) {
+      summary.triedApproaches = summary.triedApproaches.slice(-10);
+    }
+
+    // 4. agentChain: 최근 5개만 유지
+    if (this.currentContext.agentChain.length > 5) {
+      this.currentContext.agentChain = this.currentContext.agentChain.slice(-5);
+    }
   }
 
   /**
