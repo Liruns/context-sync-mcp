@@ -4,13 +4,13 @@
  */
 
 import type { DatabaseInstance } from '../db/index.js';
-import { ArchiveService } from '../services/archive-service.js';
-import type {
-  ArchiveConfig,
-  ArchiveResult,
-  ArchiveStats,
-  ArchivedContext,
-} from '../services/archive-service.js';
+import {
+  ArchiveService,
+  type ArchiveConfig,
+  type ArchiveResult,
+  type ArchiveStats,
+  type ArchivedContext,
+} from '../services/index.js';
 
 /**
  * 아카이브 액션 타입
